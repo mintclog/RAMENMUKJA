@@ -13,6 +13,14 @@
       "destination": "/index.html"
     },
     {
+      "source": "/record",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/settings",
+      "destination": "/index.html"
+    },
+    {
       "source": "/saved",
       "destination": "/index.html"
     },

@@ -143,11 +143,11 @@ function ratingGuide() {
 function shell(content, active = 'explore') {
   const nav = (url, name, key) => `<a class="nav-link ${active === key ? 'active' : ''}" href="${url}" ${active === key ? 'aria-current="page"' : ''}>${name}</a>`;
   app.innerHTML = `${serviceMode === 'demo' ? '<div class="demo-banner">체험판 · 가게·메뉴·리뷰는 가상 데이터이며 기록은 이 브라우저에만 저장됩니다.</div>' : ''}
-    <header class="site-header"><div class="header-inner"><a class="brand" href="/" aria-label="라멘묵자 홈">${icon('bowl')}<span>라멘묵자<span class="brand-dot">.</span></span></a>
+    <header class="site-header"><div class="header-inner"><a class="brand" href="/explore" aria-label="라멘묵자 홈">${icon('bowl')}<span>라멘묵자<span class="brand-dot">.</span></span></a>
     <nav class="desktop-nav" aria-label="주 메뉴">${nav('/explore', '라멘 찾기', 'explore')}${nav('/record', '기록하기', 'record')}${nav('/saved', '먹고 싶은', 'saved')}</nav>
-    <a class="account-link" href="${state.active ? '/me' : '/login'}">${icon('user')}<span>${state.active ? '내 기록' : serviceMode === 'live' ? '로그인' : '체험 시작'}</span></a></div></header>
+    <a class="account-link" href="${state.active ? '/me' : '/login'}">${icon('user')}<span>${state.active ? '내 기록' : serviceMode === 'live' ? '로그인' : '체험 시작'}</span></a><a class="settings-link icon-button" href="/settings" aria-label="설정">${icon('tune')}</a></div></header>
     <main id="main" tabindex="-1" class="container">${content}</main>
-    <footer class="site-footer"><div class="container footer-inner"><a href="/" class="brand small">${icon('bowl')}라멘묵자.</a><p>먹어본 한 그릇, 다음에 먹을 한 그릇.</p><div><button class="text-button" data-action="guide">별점 기준</button><button class="text-button" data-action="request">가게 등록 요청</button>${user?.admin ? '<a class="text-button" href="/admin">운영 관리</a>' : ''}</div><nav class="footer-legal" aria-label="이용 안내"><a href="/terms">이용약관</a><a href="/privacy"><strong>개인정보처리방침</strong></a><a href="/community">리뷰 운영정책</a></nav><small>© 2026 RAMENMUKJA${serviceMode === 'demo' ? ' · LOCAL DEMO' : ''}</small></div></footer>
+    <footer class="site-footer"><div class="container footer-inner"><a href="/explore" class="brand small">${icon('bowl')}라멘묵자.</a><p>먹어본 한 그릇, 다음에 먹을 한 그릇.</p><div><a class="text-button" href="/settings">설정</a><button class="text-button" data-action="guide">별점 기준</button><button class="text-button" data-action="request">가게 등록 요청</button>${user?.admin ? '<a class="text-button" href="/admin">운영 관리</a>' : ''}</div><nav class="footer-legal" aria-label="이용 안내"><a href="/terms">이용약관</a><a href="/privacy"><strong>개인정보처리방침</strong></a><a href="/community">리뷰 운영정책</a></nav><small>© 2026 RAMENMUKJA${serviceMode === 'demo' ? ' · LOCAL DEMO' : ''}</small></div></footer>
     <nav class="mobile-nav" aria-label="모바일 주 메뉴"><a href="/explore" ${active === 'explore' ? 'aria-current="page"' : ''}>${icon('search')}라멘 찾기</a><a href="/record" ${active === 'record' ? 'aria-current="page"' : ''}>${icon('edit')}기록하기</a><a href="/saved" ${active === 'saved' ? 'aria-current="page"' : ''}>${icon('bookmark')}먹고 싶은</a><a href="/me" ${active === 'me' ? 'aria-current="page"' : ''}>${icon('user')}내 기록</a></nav>`;
   app.querySelectorAll('img').forEach(img => img.addEventListener('error', () => { img.hidden = true; img.parentElement.classList.add('image-unavailable'); }, { once: true }));
 }
@@ -192,15 +192,6 @@ function empty(title, text, link = '/explore', label = '라멘 둘러보기') {
   return `<div class="empty-state">${icon('bowl')}<h2>${title}</h2><p>${text}</p><a class="button primary" href="${link}">${label}</a></div>`;
 }
 
-function home() {
-  const selected = menus.filter(menu => menu.status === 'active').slice(0, 3);
-  shell(`<section class="home-search"><span class="eyebrow">라멘묵자 · 취향으로 찾는 한 그릇</span><h1>다음에 먹을 라멘,<br>어떤 한 그릇인가요?</h1><p class="muted">메뉴와 가격, 먹어본 사람들의 기록을 함께 살펴보세요.</p><form class="search-box" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" placeholder="어디에서, 어떤 라멘을 먹을까요?" autocomplete="off"><button type="submit" aria-label="검색">${icon('search')}</button></form><div class="home-actions"><a class="button primary" href="/explore">먹을 라멘 찾기</a><a class="button outline" href="/record">${icon('edit')}먹은 라멘 기록하기</a></div></section>
-    <section class="browse-section" aria-label="지역과 장르 탐색"><div class="home-areas"><button class="text-button" data-action="locate">${icon('pin')}내 근처에서 찾기</button><span>지역으로 찾기</span>${[...new Set(shops.map(shop => shop.area))].map(area => `<a href="/explore?area=${encodeURIComponent(area)}">${e(area)}</a>`).join('')}</div><div class="category-list">${['돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘'].map(tag => `<a class="category" href="/explore?tag=${encodeURIComponent(tag)}">${tag}</a>`).join('')}</div></section>
-    <section class="taste-browse"><div class="section-heading"><div><h2>장르가 낯설다면, 육수부터</h2><p>메뉴에 등록된 육수와 국물 유무로 살펴보세요.</p></div></div><div class="taste-links"><a href="/explore?tag=닭%20육수"><strong>닭 육수</strong><span>닭 육수로 만든 메뉴 보기</span></a><a href="/explore?tag=돼지%20육수"><strong>돼지 육수</strong><span>돼지 육수로 만든 메뉴 보기</span></a><a href="/explore?tag=국물%20없는"><strong>국물 없는 메뉴</strong><span>비벼 먹는 한 그릇 보기</span></a></div></section>
-    <section><div class="section-heading"><div><h2>등록된 메뉴 살펴보기</h2><p>가격과 평가 수를 함께 비교해보세요.${serviceMode === 'demo' ? ' 체험용 가상 메뉴입니다.' : ''}</p></div><a class="subtle-link" href="/explore">전체 메뉴 보기</a></div>${selected.length ? `<div class="menu-grid">${selected.map(card).join('')}</div>` : empty('아직 등록된 메뉴가 없어요', '먹어본 가게가 있다면 등록 요청과 비공개 기록을 시작할 수 있어요.', '/record', '먹은 가게 찾기')}</section>
-    <section class="return-paths" aria-label="나의 다음 행동"><a href="/saved"><strong>먹고 싶은 라멘</strong><span>저장해 둔 메뉴를 다시 찾아보세요.</span></a><a href="/me"><strong>나의 라멘 기록</strong><span>먹었던 메뉴와 이어 쓸 초안을 확인하세요.</span></a></section>`);
-}
-
 function recordPage() {
   const query = new URLSearchParams(location.search).get('q') || '';
   const results = findShops(shops, query);
@@ -236,11 +227,11 @@ function explore() {
   if (p.get('sort') === 'distance' && !coords) { p.delete('sort'); history.replaceState({}, '', `/explore?${p}`); }
   if (p.get('sort') === 'rating' && !p.has('min')) { p.set('min', '1'); history.replaceState({}, '', '/explore?' + p); }
   const result = filteredMenus(p);
-  const tags = ['', '돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘'];
+  const tags = ['', '돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘','닭 육수','돼지 육수','국물 없는'];
   shell(`<section class="page-intro"><span class="eyebrow">FOLLOW YOUR TASTE</span><h1>나의 다음 한 그릇</h1><p>오늘 당기는 맛을 따라, 천천히 골라보세요.</p></section>
     <form class="search-box explore-search" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" value="${e(p.get('q') || '')}" placeholder="지역, 가게, 메뉴를 검색해보세요"><button type="submit" aria-label="검색">${icon('search')}</button></form>
-    <div class="explore-filters"><div class="chip-row">${tags.map(tag => `<button class="chip ${tag === (p.get('tag') || '') ? 'selected' : ''}" data-action="tag" data-tag="${tag}" aria-pressed="${tag === (p.get('tag') || '')}">${tag || '모든 라멘'}</button>`).join('')}</div><button class="button outline filter-button" data-action="filter">${icon('tune')} 필터${p.get('area') ? ` · ${e(p.get('area'))}` : ''}</button></div>
-    <div class="result-toolbar"><span><strong>${result.length}</strong>개의 한 그릇 ${serviceMode === 'demo' ? '<span class="muted">· 가상 데이터</span>' : ''}</span><div class="toolbar-controls"><button class="text-button" data-action="locate">${icon('pin')}${coords ? '위치 갱신' : '내 위치'}</button><label class="sr-only" for="sort">정렬</label><select id="sort"><option value="relevant">검색 관련도순</option><option value="count" ${p.get('sort') === 'count' ? 'selected' : ''}>평가 많은 순</option><option value="rating" ${p.get('sort') === 'rating' ? 'selected' : ''}>평점순</option>${coords ? `<option value="distance" ${p.get('sort') === 'distance' ? 'selected' : ''}>거리순</option>` : ''}</select><button class="text-button" data-action="map">${icon('pin')} 지도 보기</button></div></div>
+    <div class="explore-filters"><div class="chip-row" role="group" aria-label="장르와 육수 선택">${tags.map(tag => `<button class="chip ${tag === (p.get('tag') || '') ? 'selected' : ''}" data-action="tag" data-tag="${tag}" aria-pressed="${tag === (p.get('tag') || '')}">${tag || '모든 라멘'}</button>`).join('')}</div></div>
+    ${p.get('area') ? `<p class="field-help">이 링크의 지역 조건: ${e(p.get('area'))} <button class="text-button" data-action="clear-area">해제</button></p>` : ''}<div class="result-toolbar"><span><strong>${result.length}</strong>개의 한 그릇 ${serviceMode === 'demo' ? '<span class="muted">· 가상 데이터</span>' : ''}</span><div class="toolbar-controls"><button class="text-button" data-action="locate">${icon('pin')}${coords ? '위치 갱신' : '내 위치'}</button><label class="sr-only" for="sort">정렬</label><select id="sort"><option value="relevant">검색 관련도순</option><option value="count" ${p.get('sort') === 'count' ? 'selected' : ''}>평가 많은 순</option><option value="rating" ${p.get('sort') === 'rating' ? 'selected' : ''}>평점순</option>${coords ? `<option value="distance" ${p.get('sort') === 'distance' ? 'selected' : ''}>거리순</option>` : ''}</select><button class="text-button" data-action="map">${icon('pin')} 지도 보기</button></div></div>
     ${p.get('sort') === 'rating' ? `<label class="minimum"><input id="minimum" type="checkbox" ${p.get('min') === '1' ? 'checked' : ''}> 평가 5개 이상인 메뉴만 보기</label>` : ''}${locationMessage ? `<p role="status" class="note">${e(locationMessage)}</p>` : ''}
     ${result.length ? `<div class="menu-grid">${result.map(card).join('')}</div>` : empty('아직 찾지 못한 한 그릇', '검색어나 필터를 조금 바꿔보세요.', p.get('min') === '1' ? '/explore?' + new URLSearchParams([...p].map(([k,v]) => [k,k === 'min' ? '0' : v])) : '/explore', p.get('min') === '1' ? '평가 수 조건을 해제하고 보기' : '필터 초기화')}`);
   if (serviceMode === 'live') {
@@ -285,7 +276,7 @@ function login() {
   if (serviceMode === 'live') {
     const p = new URLSearchParams(location.search), mode = p.get('mode') || 'login';
     const label = { login: '로그인', signup: '회원가입', recover: '비밀번호 재설정 메일', resend: '인증 메일 다시 받기', reset: '새 비밀번호 저장', verify: '이메일 인증 완료하기' }[mode] || '로그인';
-    shell(`<section class="login-panel"><h1>${label}</h1><form id="auth-form" data-mode="${e(mode)}">${!['reset','verify'].includes(mode) ? '<label class="field-label" for="auth-email">이메일</label><input id="auth-email" name="email" type="email" autocomplete="email" required maxlength="254">' : ''}${['login','signup','reset'].includes(mode) ? '<label class="field-label" for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" required><p class="field-help">12~128자로 입력해주세요.</p>' : ''}${mode === 'signup' ? nicknameInput(generatedNickname()) + '<label class="consent"><input name="agreed" type="checkbox" required> 이용약관에 동의합니다.</label><label class="consent"><input name="ageConfirmed" type="checkbox" required> 만 14세 이상입니다.</label>' : ''}<p class="login-policies"><a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a></p><p id="auth-message" role="status"></p><button class="button primary full" type="submit" ${!launchReady ? 'disabled' : ''}>${label}</button></form>${!launchReady ? '<p class="note">운영 설정을 준비 중입니다.</p>' : ''}<nav class="auth-links"><a href="/login">로그인</a><a href="/login?mode=signup">회원가입</a><a href="/login?mode=recover">비밀번호 찾기</a><a href="/login?mode=resend">인증 메일 재발송</a></nav></section>`, 'me');
+    shell(`<section class="login-panel"><h1>${label}</h1><form id="auth-form" data-mode="${e(mode)}">${!['reset','verify'].includes(mode) ? '<label class="field-label" for="auth-email">이메일</label><input id="auth-email" name="email" type="email" autocomplete="email" required maxlength="254">' : ''}${['login','signup','reset'].includes(mode) ? '<label class="field-label" for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" required><p class="field-help">12~128자로 입력해주세요.</p>' : ''}${mode === 'signup' ? nicknameInput(generatedNickname(), true) + '<label class="consent"><input name="agreed" type="checkbox" required> 이용약관에 동의합니다.</label><label class="consent"><input name="ageConfirmed" type="checkbox" required> 만 14세 이상입니다.</label>' : ''}<p class="login-policies"><a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a></p><p id="auth-message" role="status"></p><button class="button primary full" type="submit" ${!launchReady ? 'disabled' : ''}>${label}</button></form>${!launchReady ? '<p class="note">운영 설정을 준비 중입니다.</p>' : ''}<nav class="auth-links"><a href="/login">로그인</a><a href="/login?mode=signup">회원가입</a><a href="/login?mode=recover">비밀번호 찾기</a><a href="/login?mode=resend">인증 메일 재발송</a></nav></section>`, 'me');
     return;
   }
   shell(`<section class="login-panel"><div class="login-symbol">${icon('bowl')}</div><span class="eyebrow">YOUR RAMEN JOURNAL</span><h1>나만의 한 그릇을<br>기록해보세요.</h1><p class="muted">먹고 싶은 라멘을 저장하고,<br>솔직한 취향을 한 줄씩 남겨보세요.</p><div class="note"><strong>현재는 로컬 체험 모드입니다.</strong><p>실제 회원가입이나 소셜 로그인이 아닙니다. 리뷰와 저장 목록은 이 브라우저에만 보관되며 다른 기기와 공유되지 않습니다.</p></div><p class="login-policies">시작 전에 <a href="/terms">이용약관</a>과 <a href="/privacy">개인정보처리방침</a>, <a href="/community">리뷰 운영정책</a>을 확인해주세요.</p><button class="button primary full" data-action="start-demo">브라우저 체험 시작하기 </button><a class="subtle-link" href="/explore">먼저 둘러볼게요</a></section>`, 'me');
@@ -307,8 +298,7 @@ async function adminPage() {
 function profile() {
   if (!state.active) { login(); return; }
   const stats = summarize(state.reviews.filter(r => r.userId === (user?.id || demoId)));
-  const account = accountPanel();
-  shell(`<section class="page-intro"><span class="eyebrow">MY RAMEN JOURNAL</span><h1>차곡차곡, 나의 라멘 기록</h1><p>${serviceMode === 'live' ? '내 계정으로 남긴 라멘 기록입니다.' : '이 브라우저에 남긴 나만의 취향입니다.'}</p></section><div class="profile-summary"><div><strong>${stats.count}</strong><span>기록한 한 그릇</span></div><div><strong>${state.saved.length}</strong><span>저장한 메뉴</span></div><div><strong>${score(stats.average)}</strong><span>내 평균 별점</span></div></div><div class="home-actions"><a class="button primary" href="/record">먹은 라멘 기록하기</a><a class="button outline" href="/saved">먹고 싶은 라멘 보기</a></div>${registrationRequests()}<div class="section-heading"><h2>내가 남긴 리뷰</h2></div>${state.reviews.some(r => r.userId === (user?.id || demoId)) ? `<div class="recent-grid">${state.reviews.filter(r => r.userId === (user?.id || demoId)).map(review => reviewCard(review, true)).join('')}</div>` : empty('아직 기록이 없어요', '먹어본 가게를 찾아 첫 한 그릇을 남겨보세요.', '/record', '먹은 라멘 기록하기')}<details class="profile-distribution"><summary>나의 별점 분포 보기</summary><h2>나의 별점 분포</h2>${distribution(stats)}</details><details class="profile-settings"><summary>계정 관리 · 닉네임과 탈퇴</summary>${account}<button class="text-button" data-action="logout">${serviceMode === 'live' ? '로그아웃' : '체험 종료'}</button></details><p class="note">${serviceMode === 'live' ? '리뷰를 수정하거나 삭제할 수 있습니다. 계정 관련 문의는 개인정보처리방침의 연락처를 이용해주세요.' : '체험을 종료해도 기록은 이 브라우저에 남습니다. 사이트 저장 데이터를 지우면 기록이 삭제됩니다.'}</p>`, 'me');
+  shell(`<section class="page-intro"><span class="eyebrow">MY RAMEN JOURNAL</span><h1>차곡차곡, 나의 라멘 기록</h1><a class="button outline" href="/settings">설정 · 계정과 화면 모드</a><p>${serviceMode === 'live' ? '내 계정으로 남긴 라멘 기록입니다.' : '이 브라우저에 남긴 나만의 취향입니다.'}</p></section><div class="profile-summary"><div><strong>${stats.count}</strong><span>기록한 한 그릇</span></div><div><strong>${state.saved.length}</strong><span>저장한 메뉴</span></div><div><strong>${score(stats.average)}</strong><span>내 평균 별점</span></div></div><div class="home-actions"><a class="button primary" href="/record">먹은 라멘 기록하기</a><a class="button outline" href="/saved">먹고 싶은 라멘 보기</a></div>${registrationRequests()}<div class="section-heading"><h2>내가 남긴 리뷰</h2></div>${state.reviews.some(r => r.userId === (user?.id || demoId)) ? `<div class="recent-grid">${state.reviews.filter(r => r.userId === (user?.id || demoId)).map(review => reviewCard(review, true)).join('')}</div>` : empty('아직 기록이 없어요', '먹어본 가게를 찾아 첫 한 그릇을 남겨보세요.', '/record', '먹은 라멘 기록하기')}<details class="profile-distribution"><summary>나의 별점 분포 보기</summary><h2>나의 별점 분포</h2>${distribution(stats)}</details><p class="note">${serviceMode === 'live' ? '리뷰를 수정하거나 삭제할 수 있습니다. 계정 관련 문의는 개인정보처리방침의 연락처를 이용해주세요.' : '체험을 종료해도 기록은 이 브라우저에 남습니다. 사이트 저장 데이터를 지우면 기록이 삭제됩니다.'}</p>`, 'me');
 }
 
 function savedPage() {
@@ -339,9 +329,10 @@ async function render() {
   if (!['demo','live'].includes(serviceMode)) return start();
   const route = location.pathname.replace(/\/$/, '') || '/';
   document.title = '라멘묵자 — 취향으로 찾는 한 그릇';
-  if (route === '/') return home();
+  if (route === '/') { history.replaceState({}, '', '/explore' + location.search + location.hash); return explore(); }
   if (route === '/explore') return explore();
   if (route === '/record') return recordPage();
+  if (route === '/settings') return settingsPage();
   if (route === '/saved') return savedPage();
   if (route === '/me') { const draft = new URLSearchParams(location.search).get('draft'); return draft ? draftPage(draft) : profile(); }
   if (route === '/login') return login();
@@ -397,6 +388,7 @@ document.addEventListener('click', async event => {
   if (action === 'close-modal') return modal.close();
   if (action === 'guide') return ratingGuide();
   if (action === 'locate') return locate();
+  if (action === 'clear-area') return updateSearch({ area: '' });
   if (action === 'tag') return updateSearch({ tag: button.dataset.tag });
   if (action === 'menu-status') {
     try { await request('admin', 'POST', { type: 'menu-status', id, status: button.dataset.status }); await refreshService(); await adminPage(); } catch (error) { notify(error.message); }
@@ -430,11 +422,6 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'logout' && persist({ ...state, active: false })) { navigate('/'); notify('체험을 종료했어요. 기록은 브라우저에 남아 있어요.'); }
-  if (action === 'filter') {
-    const p = new URLSearchParams(location.search);
-    showModal(`<span class="eyebrow">FIND YOUR NEIGHBORHOOD</span><h2 id="modal-title">어디에서 먹을까요?</h2><form id="filter-form"><label class="field-label" for="area">지역</label><select name="area" id="area"><option value="">모든 지역</option>${[...new Set(shops.map(shop => shop.area))].map(area => `<option ${p.get('area') === area ? 'selected' : ''}>${e(area)}</option>`).join('')}</select>${serviceMode === 'demo' ? '<p class="note">초기 체험은 마포 지역의 가상 가게로 구성됩니다.</p>' : ''}<button class="button primary full">필터 적용</button></form>`);
-    modal.classList.add('filter-sheet');
-  }
   if (action === 'map') { if (serviceMode === 'live') return updateSearch({view:new URLSearchParams(location.search).get('view') === 'map' ? 'list' : 'map'}); return showMapList(); }
   if (action === 'delete') showModal(`<h2 id="modal-title">이 기록을 삭제할까요?</h2><p>삭제한 리뷰는 이 브라우저에서 복구할 수 없습니다.</p><button class="button danger full" data-action="confirm-delete" data-id="${e(id)}">리뷰 삭제하기</button>`);
   if (action === 'confirm-delete') {
@@ -464,6 +451,7 @@ document.addEventListener('click', async event => {
 
 document.addEventListener('change', async event => {
   const target = event.target;
+  if (target.name === 'theme') { const saved = window.ramenTheme.set(target.value); document.querySelector('#theme-message').textContent = saved ? '화면 모드를 저장했어요.' : '화면 모드는 적용했지만 브라우저에 저장하지 못했어요.'; return; }
   if (target.id === 'sort') return updateSearch({ sort: target.value, min: target.value === 'rating' ? '1' : '' });
   if (target.id === 'existing-draft-menu') { const form=target.closest('form'); for (const name of ['name','price','genre']) form.elements[name].required = !target.value; return; }
   if (target.id === 'minimum') return updateSearch({ min: target.checked ? '1' : '0' });
@@ -554,7 +542,7 @@ document.addEventListener('submit', event => {
 
 document.addEventListener('submit', async event => {
   const form = event.target;
-  if (!['search-form','record-search-form','filter-form','review-form','report-form','admin-shop-form','admin-menu-form'].includes(form.id)) return;
+  if (!['search-form','record-search-form','review-form','report-form','admin-shop-form','admin-menu-form'].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   if (form.id.startsWith('admin-')) {
@@ -568,7 +556,6 @@ document.addEventListener('submit', async event => {
   }
   if (form.id === 'record-search-form') { const query = String(data.get('q') || '').trim(); return navigate('/record' + (query ? '?' + new URLSearchParams({ q: query }) : '')); }
   if (form.id === 'search-form') return updateSearch({ q: String(data.get('q')).trim() });
-  if (form.id === 'filter-form') return updateSearch({ area: data.get('area') });
   if (form.id === 'review-form') {
     if (!state.active) return notify(serviceMode === 'live' ? '로그인 상태를 확인해주세요. 입력 내용은 그대로 남아 있습니다.' : '체험 모드를 먼저 시작해주세요. 입력 내용은 그대로 남아 있습니다.');
     const menuId = form.dataset.menu, existing = ownReview(menuId);
@@ -613,8 +600,13 @@ window.addEventListener('storage', event => {
 });
 start();
 
-function nicknameInput(value) {
-  return `<label class="field-label" for="nickname">닉네임</label><input id="nickname" name="nickname" value="${e(value)}" minlength="2" maxlength="20" required autocomplete="nickname"><p class="field-help">자동 생성한 이름을 바꿔도 좋아요. 2~20자, 글자·숫자·공백·밑줄·하이픈을 사용할 수 있어요.</p>`;
+function nicknameInput(value, signup = false) {
+  return `<label class="field-label" for="nickname">닉네임</label><input id="nickname" name="nickname" value="${e(value)}" minlength="2" maxlength="20" required autocomplete="nickname"><p class="field-help">${signup ? '회원가입에 사용할 닉네임을 설정해주세요. 자동 생성된 이름을 바꿔도 좋아요.' : '공개 리뷰에 표시할 닉네임을 변경할 수 있어요.'} 2~20자, 글자·숫자·공백·밑줄·하이픈을 사용할 수 있어요.</p>`;
+}
+
+function settingsPage() {
+  document.title = '설정 — 라멘묵자';
+  shell(`<section class="page-intro"><a class="subtle-link" href="/me">내 기록</a><h1>설정</h1><p>화면 모드와 계정을 관리하세요.</p></section><div class="settings-page"><section class="settings-section"><h2>화면 모드</h2><fieldset class="theme-options"><legend class="sr-only">화면 모드 선택</legend>${[['light','라이트 모드','크림색 배경과 토마토 레드'],['dark','다크 모드','짙은 브라운과 따뜻한 크림색']].map(([value,label,description]) => `<label class="theme-choice"><input type="radio" name="theme" value="${value}" ${window.ramenTheme.get() === value ? 'checked' : ''}><span><strong>${label}</strong><small>${description}</small></span></label>`).join('')}</fieldset><p class="field-help">선택한 모드는 이 브라우저에 저장됩니다. 다른 기기와 동기화되지 않습니다.</p><p id="theme-message" role="status"></p></section><section class="settings-section"><h2>계정 관리</h2>${state.active ? `${accountPanel()}<button class="button outline" data-action="logout">${serviceMode === 'live' ? '로그아웃' : '체험 종료'}</button>` : `<p class="muted">회원가입할 때 닉네임을 설정하고, 로그인 후 여기에서 변경·탈퇴를 관리할 수 있어요.</p><a class="button primary" href="/login?next=%2Fsettings">${serviceMode === 'live' ? '로그인하고 계정 관리' : '체험 시작하고 계정 관리'}</a>`}</section></div>`, 'settings');
 }
 
 function accountPanel() {

@@ -8,7 +8,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 4173);
 const handleApi = createApi();
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
-const routes = /^\/(?:explore|saved|me|login|admin|terms|privacy|community|menus\/[^/]+(?:\/review)?|shops\/[^/]+)?\/?$/;
+const routes = /^\/(?:explore|record|saved|me|settings|login|admin|terms|privacy|community|menus\/[^/]+(?:\/review)?|shops\/[^/]+)?\/?$/;
 
 http.createServer(async (req, res) => {
   if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/')) return handleApi(req, res);
