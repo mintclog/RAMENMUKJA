@@ -21,6 +21,12 @@ export function searchRelevance(menu, shop, query) {
   return score;
 }
 
+export function findShops(shops, query = '') {
+  const normalize = value => String(value || '').normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/\s+/g, '');
+  const terms = String(query).trim().split(/\s+/).map(normalize).filter(Boolean);
+  return shops.filter(shop => terms.every(term => [shop.name, shop.area, shop.address].some(value => normalize(value).includes(term))));
+}
+
 export function summarize(reviews) {
   const visible = reviews.filter(review => !review.hidden && !review.draft && !review.privacyPending && Number.isInteger(review.rating) && review.rating >= 1 && review.rating <= 5);
   const distribution = [1, 2, 3, 4, 5].map(score => visible.filter(review => review.rating === score).length);

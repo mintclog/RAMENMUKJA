@@ -1,8 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarize, validateReview, upsertReview, deleteReview, distanceKm, searchRelevance, combineStats, representativePhoto, validateMenu, normalizeMenuName, validateNickname, optionTags, serializeOptions } from '../src/domain.js';
+import { summarize, validateReview, upsertReview, deleteReview, distanceKm, searchRelevance, combineStats, representativePhoto, validateMenu, normalizeMenuName, validateNickname, optionTags, serializeOptions, findShops } from '../src/domain.js';
 
 const review = { id: 'r1', menuId: 'm1', userId: 'u1', rating: 3, body: '', disclosure: 'self', details: {} };
+
+test('recording finds shops by name and area without requiring menu data', () => {
+  const shops = [{ id: 'a', name: '멘야 하루', area: '연남', address: '서울 마포구' }, { id: 'b', name: '멘야 하루', area: '합정' }, { id: 'c', name: 'RAMEN 01', address: '부산' }];
+  assert.deepEqual(findShops(shops, '연남 멘야하루').map(s => s.id), ['a']);
+  assert.deepEqual(findShops(shops, '멘야 하루').map(s => s.id), ['a', 'b']);
+  assert.deepEqual(findShops(shops, 'ramen０１').map(s => s.id), ['c']);
+  assert.deepEqual(findShops(shops, '없는 가게'), []);
+  assert.deepEqual(findShops(shops, '   '), shops);
+  assert.equal(shops.length, 3);
+});
 
 test('option tags preserve old free text, spelling and internal spaces across edits', () => {
   assert.deepEqual(optionTags('곱빼기, 차슈 추가'), ['곱빼기', '차슈 추가']);
