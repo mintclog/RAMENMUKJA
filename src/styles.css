@@ -622,8 +622,11 @@ section{
   color:var(--primary);
   background:#fff
 }
-.is-saved .icon{
-  fill:#c9432b22
+[data-action="save"][aria-pressed="true"]{
+  color:var(--primary)
+}
+[data-action="save"][aria-pressed="true"] .icon{
+  fill:currentColor
 }
 .card-body{
   padding:20px
@@ -2391,3 +2394,35 @@ a,button{transition:color .18s,background .18s,border-color .18s}.card-photo img
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 
 .consent{display:flex;align-items:center;gap:12px;min-height:44px;text-align:left;font-size:14px;margin:8px 0}.consent input{width:20px;height:20px;accent-color:var(--primary)}
+
+/* Menu selection and account flows follow the existing cream/red palette. */
+.menu-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:32px}
+.menu-choice{display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:10px;min-width:0;height:230px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface);text-align:left;color:var(--text);text-decoration:none;font:inherit;cursor:pointer}
+.menu-choice .food-image{height:120px;flex:none;aspect-ratio:auto;border-radius:6px;overflow:hidden}
+.menu-choice strong{font-size:16px;overflow-wrap:anywhere}.menu-choice>span{font-size:14px;color:var(--muted)}
+.menu-choice:hover,.menu-choice.selected{border-color:var(--primary)}.add-menu{align-items:center;text-align:center;border-style:dashed}.menu-choice .add-mark{font-size:36px;line-height:1;color:var(--primary)}
+.image-unavailable{background:#e5e5e5!important}.image-unavailable .image-placeholder{color:#505050}.image-placeholder{font-size:14px}
+.account-panel{display:grid;grid-template-columns:1fr 1fr;gap:32px;padding:24px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:24px 0}
+.account-panel input:not([type=checkbox]),.account-panel select,.login-panel input:not([type=checkbox]),#draft-form input,#draft-form select{width:100%}
+.account-panel button{margin-top:16px}.account-panel summary{font-weight:650;cursor:pointer;padding:12px 0}.request-item{padding:20px 0;border-bottom:1px solid var(--border)}.request-item .button{margin-top:12px}
+.auth-links{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:24px;font-size:14px}.review-actions button{min-height:44px}.review-options{font-size:14px;color:var(--muted)}
+.map-panel{height:360px;min-height:240px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--muted);margin:16px 0;overflow:hidden}.privacy-photo{width:140px;height:120px;object-fit:cover;margin:8px}
+.explore-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,0.8fr);gap:24px;align-items:start}.explore-layout>.menu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.explore-layout>.map-panel{position:sticky;top:100px;height:560px;margin:0}
+#draft-form>button{margin:16px 8px 0 0}#draft-form details{margin:20px 0}#draft-form details label{display:block;margin:12px 0}#menu-matches .button{display:block;margin:8px 0}
+@media(max-width:1023px){.menu-picker{grid-template-columns:repeat(2,minmax(0,1fr))}.explore-layout{display:block}.explore-layout>.map-panel{display:none;position:static;height:420px}.explore-layout.is-map>.map-panel{display:block}.explore-layout.is-map>.menu-grid,.explore-layout.is-map>.empty-state{display:none}}
+@media(max-width:767px){.menu-picker{gap:12px}.menu-choice{height:220px;padding:12px}.menu-choice .food-image{height:105px}.account-panel{grid-template-columns:1fr;gap:24px}.map-panel{height:300px}.menu-choice>span{font-size:13px}}
+.menu-choice strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3}.menu-choice>span:not(.add-mark){line-height:1.4}
+@media(max-width:767px){.menu-choice{gap:8px}.menu-choice strong{font-size:15px}.menu-choice .food-image{height:100px}}
+
+/* Order options share one tag editor across public reviews and private drafts. */
+.option-tag-list,.review-options{display:flex;flex-wrap:wrap;gap:8px}
+.option-tag-list:not(:empty){margin-bottom:12px}
+.option-tag{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:6px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:14px;overflow-wrap:anywhere}
+.option-tag button{display:grid;place-items:center;flex-shrink:0;min-width:32px;min-height:32px;border-radius:4px}
+.option-tag button:hover{background:var(--bg)}
+.option-tag .icon{width:14px;height:14px}
+.option-entry{display:flex;align-items:stretch;gap:8px}
+.option-entry input{min-width:0;flex:1;width:0}
+.option-entry .button{flex-shrink:0}
+.option-editor [data-option-error]:empty{display:none}
+.review-options{margin:12px 0}

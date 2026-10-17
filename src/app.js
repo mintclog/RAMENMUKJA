@@ -1,8 +1,9 @@
+import { renderMap, directions } from './maps.js';
 import { shops as demoShops, menus as demoMenus, seedReviews as demoReviews } from './data.js';
 import { legalDocuments as demoLegalDocuments, legalSources } from './legal.js';
 import { createLiveLegal } from './live-legal.js';
 import { request } from './service.js';
-import { summarize, ratingLabels, validateReview, upsertReview, deleteReview, distanceKm, searchRelevance, combineStats } from './domain.js';
+import { summarize, ratingLabels, validateReview, upsertReview, deleteReview, distanceKm, searchRelevance, combineStats, genres, validateMenu, normalizeMenuName, representativePhoto, generatedNickname, validateNickname, optionTags, serializeOptions } from './domain.js';
 
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
@@ -12,24 +13,29 @@ let shops = demoShops, menus = demoMenus, seedReviews = demoReviews;
 let serviceMode = 'loading';
 let legalDocuments = demoLegalDocuments;
 let launchReady = false;
+let mapsConfig = {};
+let withdrawalReady = false;
+let draftPhotos = new Map();
 let user = null;
 let remoteStats = new Map();
 // shortcut: browser-only identity; replace with server sessions before multi-user operation.
 const demoId = 'local-demo-user';
-let state = { active: false, saved: [], reviews: [], reports: [], requests: [] };
+let state = { active: false, saved: [], reviews: [], reports: [], requests: [], customMenus: [], liked: [], drafts: [], newPhotos: {}, nickname: generatedNickname() };
 let storageWarning = '';
 let storageSnapshot = null;
 try {
   storageSnapshot = localStorage.getItem(storageKey);
   const loaded = JSON.parse(storageSnapshot || 'null');
   if (loaded) {
+    const custom = Array.isArray(loaded.customMenus) ? loaded.customMenus.filter(m => m && typeof m.id === 'string' && typeof m.name === 'string' && shops.some(s => s.id === m.shopId) && Array.isArray(m.tags) && Number.isInteger(m.price)) : [];
+    menus = [...demoMenus, ...custom];
     if (!Array.isArray(loaded.saved) || !Array.isArray(loaded.reviews) || !Array.isArray(loaded.reports) || !Array.isArray(loaded.requests)) throw new Error();
-    const validReviews = loaded.reviews.filter(review => review && review.userId === demoId
+    const validReviews = loaded.reviews.filter(review => review && (review.userId === demoId || (review.userId === null && review.privacyPending))
       && typeof review.id === 'string' && typeof review.author === 'string'
       && typeof review.body === 'string' && typeof review.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(review.date)
       && Array.isArray(review.photos) && review.photos.length <= 5
       && menus.some(menu => menu.id === review.menuId) && !validateReview(review));
-    state = { active: loaded.active === true, saved: loaded.saved.filter(id => menus.some(menu => menu.id === id)), reviews: validReviews, reports: loaded.reports, requests: loaded.requests };
+    state = { ...state, ...loaded, customMenus: custom, active: loaded.active === true, saved: loaded.saved.filter(id => menus.some(menu => menu.id === id)), reviews: validReviews, reports: loaded.reports, requests: loaded.requests };
   }
 } catch { storageWarning = '브라우저 저장 데이터를 읽지 못했어요. 새 기록은 저장 시 다시 확인합니다.'; }
 
@@ -42,7 +48,6 @@ const icons = {
   search: '<circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/>',
   pin: '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
   bookmark: '<path d="M6 3h12v18l-6-4-6 4Z"/>',
-  arrow: '<path d="M4 12h15m-6-6 6 6-6 6"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/>',
   tune: '<path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
@@ -52,27 +57,28 @@ const icons = {
 };
 const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.bowl}</svg>`;
 const shopOf = menu => shops.find(shop => shop.id === menu.shopId);
-const reviewsFor = id => [...seedReviews, ...state.reviews].filter(review => review.menuId === id && !review.hidden);
+const reviewsFor = id => [...seedReviews, ...state.reviews].filter(review => review.menuId === id && !review.hidden && !review.privacyPending).map(r => serviceMode === 'demo' ? { ...r, likes: (r.likes || 0) + (state.liked.includes(r.id) ? 1 : 0), liked: state.liked.includes(r.id) } : r);
 const statsFor = id => serviceMode === 'live' ? remoteStats.get(id) || summarize([]) : summarize(reviewsFor(id));
 const score = value => value == null ? '—' : value.toFixed(1);
+const dateLabel = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : value ? new Date(value).toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) : '';
 const price = value => `${value.toLocaleString('ko-KR')}원`;
 const ownReview = id => state.reviews.find(review => review.menuId === id && review.userId === (user?.id || demoId));
 const distanceTo = shop => coords && Number.isFinite(shop.lat) && Number.isFinite(shop.lng) ? distanceKm(coords.latitude, coords.longitude, shop.lat, shop.lng) : Infinity;
-const photoSrc = value => typeof value === 'string' && (/^data:image\/jpeg;base64,[a-zA-Z0-9+/=]+$/.test(value) || /^\/api\/photos\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.jpg$/.test(value)) ? value : '';
+const photoSrc = value => typeof value === 'string' && (/^data:image\/jpeg;base64,[a-zA-Z0-9+/=]+$/.test(value) || /^\/api\/photos\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.jpg$/.test(value) || (serviceMode === 'demo' && /^https:\/\/images\.unsplash\.com\//.test(value))) ? value : '';
 
 async function refreshService() {
   const data = await request('bootstrap');
   shops = data.shops; menus = data.menus; seedReviews = [];
   user = data.user;
   remoteStats = new Map(data.stats.map(s => [s.menu_id, s]));
-  state = { active: Boolean(user), saved: data.saved, reviews: data.reviews, reports: [], requests: [] };
+  state = { ...state, active: Boolean(user), saved: data.saved, reviews: data.reviews, reports: [], requests: data.requests || [], drafts: data.drafts || [], nickname: user?.nickname || '' };
 }
 
 async function start() {
   try {
     const status = await request('status');
     serviceMode = status.mode;
-    launchReady = status.launchReady;
+    launchReady = status.launchReady; mapsConfig = status.maps || {}; withdrawalReady = status.withdrawalReady;
     if (serviceMode === 'live') legalDocuments = createLiveLegal(status.operator);
     if (serviceMode === 'unconfigured') throw new Error('운영 서비스 연결을 준비하고 있습니다. 잠시 후 다시 방문해주세요.');
     if (serviceMode === 'live') await refreshService();
@@ -140,13 +146,18 @@ function shell(content, active = 'explore') {
     <nav class="desktop-nav" aria-label="주 메뉴">${nav('/explore', '라멘 탐색', 'explore')}${nav('/saved', '저장한 한 그릇', 'saved')}<button class="text-button" data-action="guide">별점 가이드</button></nav>
     <a class="account-link" href="${state.active ? '/me' : '/login'}">${icon('user')}<span>${state.active ? '내 기록' : serviceMode === 'live' ? '로그인' : '체험 시작'}</span></a></div></header>
     <main id="main" tabindex="-1" class="container">${content}</main>
-    <footer class="site-footer"><div class="container footer-inner"><a href="/" class="brand small">${icon('bowl')}라멘묵자.</a><p>먹어본 한 그릇, 다음에 먹을 한 그릇.</p><div><button class="text-button" data-action="guide">별점 기준</button><button class="text-button" data-action="request">가게·메뉴 등록 요청</button>${user?.admin ? '<a class="text-button" href="/admin">운영 관리</a>' : ''}</div><nav class="footer-legal" aria-label="이용 안내"><a href="/terms">이용약관</a><a href="/privacy"><strong>개인정보처리방침</strong></a><a href="/community">리뷰 운영정책</a></nav><small>© 2026 RAMENMUKJA${serviceMode === 'demo' ? ' · LOCAL DEMO' : ''}</small></div></footer>
+    <footer class="site-footer"><div class="container footer-inner"><a href="/" class="brand small">${icon('bowl')}라멘묵자.</a><p>먹어본 한 그릇, 다음에 먹을 한 그릇.</p><div><button class="text-button" data-action="guide">별점 기준</button><button class="text-button" data-action="request">가게 등록 요청</button>${user?.admin ? '<a class="text-button" href="/admin">운영 관리</a>' : ''}</div><nav class="footer-legal" aria-label="이용 안내"><a href="/terms">이용약관</a><a href="/privacy"><strong>개인정보처리방침</strong></a><a href="/community">리뷰 운영정책</a></nav><small>© 2026 RAMENMUKJA${serviceMode === 'demo' ? ' · LOCAL DEMO' : ''}</small></div></footer>
     <nav class="mobile-nav" aria-label="모바일 주 메뉴"><a href="/explore" ${active === 'explore' ? 'aria-current="page"' : ''}>${icon('search')}탐색</a><a href="/saved" ${active === 'saved' ? 'aria-current="page"' : ''}>${icon('bookmark')}저장</a><a href="/me" ${active === 'me' ? 'aria-current="page"' : ''}>${icon('user')}내 기록</a></nav>`;
   app.querySelectorAll('img').forEach(img => img.addEventListener('error', () => { img.hidden = true; img.parentElement.classList.add('image-unavailable'); }, { once: true }));
 }
 
+function menuPhoto(menu) {
+  return serviceMode === 'live' ? menu.image || '' : representativePhoto(reviewsFor(menu.id));
+}
+
 function image(menu, cls = '') {
-  return `<div class="food-image ${cls} ${menu.image ? '' : 'image-unavailable'}">${menu.image ? `<img src="${e(menu.image)}" alt="${e(menu.name)} ${serviceMode === 'demo' ? '분위기를 보여주는 참고 사진' : '메뉴 사진'}" loading="lazy">` : ''}<span class="image-placeholder">${icon('bowl')}사진 준비 중</span></div>`;
+  const src = photoSrc(menuPhoto(menu));
+  return `<div class="food-image ${cls} ${src ? '' : 'image-unavailable'}">${src ? `<img src="${e(src)}" alt="${e(menu.name)} ${serviceMode === 'demo' ? '체험 리뷰 참고 사진' : '리뷰 사진'}" loading="lazy">` : ''}<span class="image-placeholder">${icon('bowl')}사진 없음</span></div>`;
 }
 
 function card(menu) {
@@ -163,26 +174,26 @@ function shopLink(shop) {
 function legalPage(key) {
   const doc = legalDocuments[key];
   document.title = `${doc.title} — 라멘묵자`;
-  shell(`<div class="legal-layout"><aside class="legal-sidebar"><span class="eyebrow">이용 안내</span><nav aria-label="정책 문서">${Object.entries(legalDocuments).map(([id, item]) => `<a href="/${id}" ${id === key ? 'aria-current="page"' : ''}>${e(item.title)}</a>`).join('')}</nav></aside><article class="legal-document"><header><span class="eyebrow">RAMENMUKJA / ${e(key.toUpperCase())}</span><h1>${e(doc.title)}</h1><p>${e(doc.summary)}</p><span class="muted small-text">작성·적용일 2026.10.16 · ${serviceMode === 'live' ? '운영 서비스' : '로컬 체험판'} v1.0</span></header>${serviceMode === 'demo' ? '<p class="note"><strong>현재 체험판 기준의 문서입니다.</strong> 운영 전 운영자 정보와 실제 데이터 처리 환경을 확정해야 합니다.</p>' : !launchReady ? '<p class="note">운영 정보와 개인정보 안내를 준비 중이며 신규 로그인은 아직 열리지 않았습니다.</p>' : ''}<nav class="legal-toc" aria-label="문서 목차">${doc.sections.map(([title], i) => `<a href="#policy-${i + 1}">${String(i + 1).padStart(2, '0')}. ${e(title)}</a>`).join('')}</nav>${doc.sections.map(([title, body], i) => `<section id="policy-${i + 1}"><h2><span>${String(i + 1).padStart(2, '0')}</span> ${e(title)}</h2><p>${e(body)}</p></section>`).join('')}<details class="legal-sources"><summary>작성 기준과 공식 참고 자료</summary><p>2026년 10월 16일 확인. 판매·결제가 없는 리뷰 서비스의 기능에 맞춰 작성했습니다.</p><ul>${legalSources.map(([title, url]) => `<li><a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(title)} ↗</a></li>`).join('')}</ul></details></article></div>`, 'legal');
+  shell(`<div class="legal-layout"><aside class="legal-sidebar"><span class="eyebrow">이용 안내</span><nav aria-label="정책 문서">${Object.entries(legalDocuments).map(([id, item]) => `<a href="/${id}" ${id === key ? 'aria-current="page"' : ''}>${e(item.title)}</a>`).join('')}</nav></aside><article class="legal-document"><header><span class="eyebrow">RAMENMUKJA / ${e(key.toUpperCase())}</span><h1>${e(doc.title)}</h1><p>${e(doc.summary)}</p><span class="muted small-text">작성·적용일 2026.10.17 · ${serviceMode === 'live' ? '운영 서비스' : '로컬 체험판'} v1.1</span></header>${serviceMode === 'demo' ? '<p class="note"><strong>현재 체험판 기준의 문서입니다.</strong> 운영 전 운영자 정보와 실제 데이터 처리 환경을 확정해야 합니다.</p>' : !launchReady ? '<p class="note">운영 정보와 개인정보 안내를 준비 중이며 신규 로그인은 아직 열리지 않았습니다.</p>' : ''}<nav class="legal-toc" aria-label="문서 목차">${doc.sections.map(([title], i) => `<a href="#policy-${i + 1}">${String(i + 1).padStart(2, '0')}. ${e(title)}</a>`).join('')}</nav>${doc.sections.map(([title, body], i) => `<section id="policy-${i + 1}"><h2><span>${String(i + 1).padStart(2, '0')}</span> ${e(title)}</h2><p>${e(body)}</p></section>`).join('')}<details class="legal-sources"><summary>작성 기준과 공식 참고 자료</summary><p>2026년 10월 16일 확인. 판매·결제가 없는 리뷰 서비스의 기능에 맞춰 작성했습니다.</p><ul>${legalSources.map(([title, url]) => `<li><a href="${e(url)}" target="_blank" rel="noopener noreferrer">${e(title)} ↗</a></li>`).join('')}</ul></details></article></div>`, 'legal');
 }
 
 function reviewCard(review, showMenu = false) {
   const menu = menus.find(item => item.id === review.menuId);
   const own = state.active && review.userId === (user?.id || demoId);
-  return `<article class="review-card"><div class="review-top"><span class="avatar">${e(review.author?.slice(0, 1) || '나')}</span><div><strong>${e(review.author || '나의 기록')}</strong><span class="review-date">${e(review.date)} · ${review.disclosure === 'sponsored' ? '식사 제공·협찬' : '직접 결제'}</span></div><span class="review-score" aria-label="${review.rating}점">★ ${review.rating}.0</span></div>
-    ${showMenu ? `<a class="review-menu" href="/menus/${menu.id}">${e(menu.name)} ${icon('arrow')}</a>` : ''}<p class="review-body">${e(review.body || '별점으로 남긴 한 그릇의 기록입니다.')}</p>
+  return `<article class="review-card"><div class="review-top"><span class="avatar">${e(review.author?.slice(0, 1) || '나')}</span><div><strong>${e(review.author || '나의 기록')}</strong><span class="review-date">작성 ${e(dateLabel(review.createdAt || review.date))}${review.edited ? ' · 수정 ' + e(dateLabel(review.updatedAt)) : ''}</span></div><span class="review-score" aria-label="${review.rating}점">★ ${review.rating}.0</span></div>
+    ${showMenu ? `<a class="review-menu" href="/menus/${menu.id}">${e(menu.name)} </a>` : ''}<p class="review-body">${e(review.body || '별점으로 남긴 한 그릇의 기록입니다.')}</p>
     ${review.photos?.length ? `<div class="review-photos">${review.photos.filter(photoSrc).map(src => `<button class="photo-button" data-action="photo" data-review="${e(review.id)}" data-index="${review.photos.indexOf(src)}"><img src="${src}" alt="리뷰 음식 사진" loading="lazy"></button>`).join('')}</div>` : ''}
-    ${review.taste ? `<div class="tags">${Object.values(review.taste).filter(Boolean).map(tag => `<span>${e(tag)}</span>`).join('')}</div>` : ''}
-    ${review.hidden && own ? `<p class="note">운영 검토로 공개가 중단된 리뷰입니다. 사유: ${e(review.moderationReason || '운영자에게 문의해주세요')}</p>` : ''}<div class="review-actions">${own ? `<a href="/menus/${menu.id}/review">수정</a><button data-action="delete" data-id="${e(review.id)}">삭제</button>` : `<button data-action="report" data-id="${e(review.id)}">신고</button>`}</div></article>`;
+    ${review.options ? `<div class="review-options" aria-label="주문 옵션">${optionTagList(review.options)}</div>` : ''}
+    ${review.hidden && own ? `<p class="note">운영 검토로 공개가 중단된 리뷰입니다. 사유: ${e(review.moderationReason || '운영자에게 문의해주세요')}</p>` : ''}<div class="review-actions">${!own && !review.hidden && !review.privacyPending ? `<button data-action="like" data-id="${e(review.id)}" aria-pressed="${review.liked || false}">좋아요 ${review.likes || 0}</button>` : ''}${own ? `<a href="/menus/${menu.id}/review">수정</a><button data-action="delete" data-id="${e(review.id)}">삭제</button>` : `<button data-action="report" data-id="${e(review.id)}">신고</button>`}</div></article>`;
 }
 
 function empty(title, text, link = '/explore', label = '라멘 둘러보기') {
-  return `<div class="empty-state">${icon('bowl')}<h2>${title}</h2><p>${text}</p><a class="button primary" href="${link}">${label}${icon('arrow')}</a></div>`;
+  return `<div class="empty-state">${icon('bowl')}<h2>${title}</h2><p>${text}</p><a class="button primary" href="${link}">${label}</a></div>`;
 }
 
 function home() {
   const selected = menus.filter(menu => menu.status === 'active').slice(0, 3);
-  shell(`<section class="home-search"><span class="eyebrow">라멘묵자 · 취향으로 찾는 한 그릇</span><h1>오늘은 어떤 한 그릇?</h1><p class="muted">먹고 싶은 메뉴를 찾고, 먹어본 취향을 남겨보세요.</p><form class="search-box" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" placeholder="지역, 가게, 메뉴를 검색하세요" autocomplete="off"><button type="submit" aria-label="검색">${icon('arrow')}</button></form></section><section class="browse-section" aria-label="지역과 장르 탐색"><div class="category-list"><button class="category near" data-action="locate">${icon('pin')}<span>내 근처</span></button>${['돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘'].map(tag => '<a class="category" href="/explore?tag=' + encodeURIComponent(tag) + '">' + tag + '</a>').join('')}</div><div class="home-areas"><span>지역으로 찾기</span>${[...new Set(shops.map(shop => shop.area))].map(area => '<a href="/explore?area=' + encodeURIComponent(area) + '">' + e(area) + ' ' + icon('arrow') + '</a>').join('')}</div></section><section><div class="section-heading"><div><h2>${serviceMode === 'demo' ? '마포에서 만나는 한 그릇' : '살펴볼 메뉴'}</h2><p>${serviceMode === 'demo' ? '연남·합정·망원의 체험용 메뉴입니다.' : '평가와 취향을 함께 비교해보세요.'}</p></div><a class="subtle-link" href="/explore">전체 메뉴 ${icon('arrow')}</a></div>${selected.length ? `<div class="menu-grid">${selected.map(card).join('')}</div>` : empty('첫 메뉴를 준비하고 있어요', '가게와 메뉴 정보가 등록되면 여기에서 만날 수 있어요.')}</section><section class="taste-browse"><div class="section-heading"><h2>국물 취향으로 고르기</h2></div><div class="taste-links"><a href="/explore?tag=닭%20육수"><strong>맑고 담백하게</strong><span>닭 육수 메뉴 보기 ${icon('arrow')}</span></a><a href="/explore?tag=돼지%20육수"><strong>진하고 묵직하게</strong><span>돼지 육수 메뉴 보기 ${icon('arrow')}</span></a><a href="/explore?tag=국물%20없는"><strong>국물 없이 고소하게</strong><span>아부라소바 메뉴 보기 ${icon('arrow')}</span></a></div></section><section><div class="section-heading"><h2>최근 남긴 한 그릇의 기록</h2></div><div class="recent-grid">${[...seedReviews, ...state.reviews].filter(review => !review.hidden).sort((a,b) => b.date.localeCompare(a.date)).slice(0,3).map(review => reviewCard(review, true)).join('')}</div></section><section class="rating-promise"><span class="promise-mark">3<span>/ 5</span></span><div><h2>3점도 좋은 라멘입니다.</h2><p>5점은 특별한 한 그릇에. 솔직한 이유를 함께 남겨요.</p></div><button class="button outline" data-action="guide">별점 기준 ${icon('arrow')}</button></section>`);
+  shell(`<section class="home-search"><span class="eyebrow">라멘묵자 · 취향으로 찾는 한 그릇</span><h1>오늘은 어떤 한 그릇?</h1><p class="muted">먹고 싶은 메뉴를 찾고, 먹어본 취향을 남겨보세요.</p><form class="search-box" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" placeholder="지역, 가게, 메뉴를 검색하세요" autocomplete="off"><button type="submit" aria-label="검색">${icon('search')}</button></form></section><section class="browse-section" aria-label="지역과 장르 탐색"><div class="category-list"><button class="category near" data-action="locate">${icon('pin')}<span>내 근처</span></button>${['돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘'].map(tag => '<a class="category" href="/explore?tag=' + encodeURIComponent(tag) + '">' + tag + '</a>').join('')}</div><div class="home-areas"><span>지역으로 찾기</span>${[...new Set(shops.map(shop => shop.area))].map(area => '<a href="/explore?area=' + encodeURIComponent(area) + '">' + e(area) + '</a>').join('')}</div></section><section><div class="section-heading"><div><h2>${serviceMode === 'demo' ? '마포에서 만나는 한 그릇' : '살펴볼 메뉴'}</h2><p>${serviceMode === 'demo' ? '연남·합정·망원의 체험용 메뉴입니다.' : '평가와 취향을 함께 비교해보세요.'}</p></div><a class="subtle-link" href="/explore">전체 메뉴 </a></div>${selected.length ? `<div class="menu-grid">${selected.map(card).join('')}</div>` : empty('첫 메뉴를 준비하고 있어요', '가게와 메뉴 정보가 등록되면 여기에서 만날 수 있어요.')}</section><section class="taste-browse"><div class="section-heading"><h2>국물 취향으로 고르기</h2></div><div class="taste-links"><a href="/explore?tag=닭%20육수"><strong>맑고 담백하게</strong><span>닭 육수 메뉴 보기 </span></a><a href="/explore?tag=돼지%20육수"><strong>진하고 묵직하게</strong><span>돼지 육수 메뉴 보기 </span></a><a href="/explore?tag=국물%20없는"><strong>국물 없이 고소하게</strong><span>아부라소바 메뉴 보기 </span></a></div></section><section><div class="section-heading"><h2>최근 남긴 한 그릇의 기록</h2></div><div class="recent-grid">${menus.flatMap(menu => reviewsFor(menu.id)).sort((a,b) => b.date.localeCompare(a.date)).slice(0,3).map(review => reviewCard(review, true)).join('')}</div></section><section class="rating-promise"><span class="promise-mark">3<span>/ 5</span></span><div><h2>3점도 좋은 라멘입니다.</h2><p>5점은 특별한 한 그릇에. 솔직한 이유를 함께 남겨요.</p></div><button class="button outline" data-action="guide">별점 기준 </button></section>`);
 }
 
 function filteredMenus(params) {
@@ -213,11 +224,22 @@ function explore() {
   const result = filteredMenus(p);
   const tags = ['', '돈코츠','시오','쇼유','탄탄면','아부라소바','츠케멘'];
   shell(`<section class="page-intro"><span class="eyebrow">FOLLOW YOUR TASTE</span><h1>나의 다음 한 그릇</h1><p>오늘 당기는 맛을 따라, 천천히 골라보세요.</p></section>
-    <form class="search-box explore-search" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" value="${e(p.get('q') || '')}" placeholder="지역, 가게, 메뉴를 검색해보세요"><button type="submit" aria-label="검색">${icon('arrow')}</button></form>
+    <form class="search-box explore-search" id="search-form">${icon('search')}<input name="q" aria-label="지역, 가게 또는 메뉴 검색" value="${e(p.get('q') || '')}" placeholder="지역, 가게, 메뉴를 검색해보세요"><button type="submit" aria-label="검색">${icon('search')}</button></form>
     <div class="explore-filters"><div class="chip-row">${tags.map(tag => `<button class="chip ${tag === (p.get('tag') || '') ? 'selected' : ''}" data-action="tag" data-tag="${tag}" aria-pressed="${tag === (p.get('tag') || '')}">${tag || '모든 라멘'}</button>`).join('')}</div><button class="button outline filter-button" data-action="filter">${icon('tune')} 필터${p.get('area') ? ` · ${e(p.get('area'))}` : ''}</button></div>
-    <div class="result-toolbar"><span><strong>${result.length}</strong>개의 한 그릇 ${serviceMode === 'demo' ? '<span class="muted">· 가상 데이터</span>' : ''}</span><div class="toolbar-controls"><button class="text-button" data-action="locate">${icon('pin')}${coords ? '위치 갱신' : '내 위치'}</button><label class="sr-only" for="sort">정렬</label><select id="sort"><option value="relevant">검색 관련도순</option><option value="count" ${p.get('sort') === 'count' ? 'selected' : ''}>평가 많은 순</option><option value="rating" ${p.get('sort') === 'rating' ? 'selected' : ''}>평점순</option>${coords ? `<option value="distance" ${p.get('sort') === 'distance' ? 'selected' : ''}>거리순</option>` : ''}</select><button class="text-button" data-action="map">${icon('pin')} 지도 안내</button></div></div>
+    <div class="result-toolbar"><span><strong>${result.length}</strong>개의 한 그릇 ${serviceMode === 'demo' ? '<span class="muted">· 가상 데이터</span>' : ''}</span><div class="toolbar-controls"><button class="text-button" data-action="locate">${icon('pin')}${coords ? '위치 갱신' : '내 위치'}</button><label class="sr-only" for="sort">정렬</label><select id="sort"><option value="relevant">검색 관련도순</option><option value="count" ${p.get('sort') === 'count' ? 'selected' : ''}>평가 많은 순</option><option value="rating" ${p.get('sort') === 'rating' ? 'selected' : ''}>평점순</option>${coords ? `<option value="distance" ${p.get('sort') === 'distance' ? 'selected' : ''}>거리순</option>` : ''}</select><button class="text-button" data-action="map">${icon('pin')} 지도 보기</button></div></div>
     ${p.get('sort') === 'rating' ? `<label class="minimum"><input id="minimum" type="checkbox" ${p.get('min') === '1' ? 'checked' : ''}> 평가 5개 이상인 메뉴만 보기</label>` : ''}${locationMessage ? `<p role="status" class="note">${e(locationMessage)}</p>` : ''}
-    ${result.length ? `<div class="menu-grid">${result.map(card).join('')}</div>` : empty('아직 찾지 못한 한 그릇', '검색어나 필터를 조금 바꿔보세요.', '/explore', '필터 초기화')}`);
+    ${result.length ? `<div class="menu-grid">${result.map(card).join('')}</div>` : empty('아직 찾지 못한 한 그릇', '검색어나 필터를 조금 바꿔보세요.', p.get('min') === '1' ? '/explore?' + new URLSearchParams([...p].map(([k,v]) => [k,k === 'min' ? '0' : v])) : '/explore', p.get('min') === '1' ? '평가 수 조건을 해제하고 보기' : '필터 초기화')}`);
+  if (serviceMode === 'live') {
+    const results = document.querySelector('#main > .menu-grid, #main > .empty-state');
+    if (results) {
+      const layout=document.createElement('div'); layout.className='explore-layout' + (p.get('view')==='map'?' is-map':'');
+      results.before(layout); layout.append(results);
+      const panel=document.createElement('div');panel.className='map-panel';layout.append(panel);
+      const ids=new Set(result.map(m=>m.shopId));
+      renderMap(panel,shops.filter(shop=>ids.has(shop.id)),mapsConfig,{onSelect(shop){navigate('/shops/'+encodeURIComponent(shop.id));}});
+    }
+  }
+
 }
 
 function distribution(stats) {
@@ -233,20 +255,26 @@ function menuDetail(menu) {
     return `<div><span>${label}</span><strong>${values.length ? score(values.reduce((a,b) => a+b,0) / values.length) : '—'}</strong><small>${values.length}명 응답</small></div>`;
   }).join('');
   shell(`<nav class="breadcrumb" aria-label="현재 위치"><a href="/explore">라멘 탐색</a><span>/</span><a href="/shops/${shop.id}">${e(shop.name)}</a><span>/</span><span>${e(menu.name)}</span></nav>
-    <section class="menu-detail-top">${menu.image ? `<button class="menu-photo-button" data-action="menu-photo" data-id="${menu.id}" aria-label="${e(menu.name)} 참고 사진 원본 비율로 보기">${image(menu, 'detail-image')}<span>사진 크게 보기 ${icon('search')}</span></button>` : image(menu, 'detail-image')}<div class="menu-description"><span class="eyebrow">${menu.status === 'ended' ? '판매 종료 메뉴' : 'ONE BOWL, ONE STORY'}</span><a class="shop-detail-link shop-name" href="/shops/${shop.id}">${e(shop.name)} · ${e(shop.area)} ${icon('arrow')}</a><h1>${e(menu.name)}</h1><div class="tags">${menu.tags.map(tag => `<a href="/explore?tag=${encodeURIComponent(tag)}">${e(tag)}</a>`).join('')}</div><p>${e(menu.description)}</p><strong class="detail-price">${price(menu.price)}</strong>${serviceMode === 'demo' ? '<p class="small-text muted">가상 메뉴 · 사진은 메뉴와 다른 참고 이미지입니다.</p>' : ''}<div class="detail-buttons"><a class="button primary" href="/menus/${menu.id}/review">${own ? '내 리뷰 수정하기' : '이 한 그릇 기록하기'} ${icon('arrow')}</a><button class="button outline" data-action="save" data-id="${menu.id}" aria-pressed="${state.saved.includes(menu.id)}">${icon('bookmark')}${state.saved.includes(menu.id) ? '저장됨' : '저장'}</button></div></div></section>
-    <div class="detail-layout"><section><div class="section-heading"><h2>한 그릇의 평가 <span class="muted">${stats.count}</span></h2><button class="text-button" data-action="guide">별점 기준 ${icon('arrow')}</button></div><div class="rating-panel"><div class="rating-total"><strong>${score(stats.average)}</strong><span>/ 5</span><p>${stats.count ? `${stats.count}명의 솔직한 기록` : '아직 평가가 없어요'}</p>${stats.count > 0 && stats.count < 5 ? '<small class="low-count">평가가 적어요</small>' : ''}</div>${distribution(stats)}</div><div class="detail-scores">${details}</div><h2 class="reviews-title">한 줄에 담긴 진심</h2>${serviceMode === 'live' ? '<p class="muted small-text">최근 공개 리뷰 최대 100개를 표시합니다. 평균과 분포는 전체 공개 리뷰 기준입니다.</p>' : ''}${reviews.length ? reviews.slice().sort((a,b) => b.date.localeCompare(a.date)).map(review => reviewCard(review)).join('') : empty('첫 기록을 기다리고 있어요', '나만의 솔직한 한 그릇을 남겨주세요.', `/menus/${menu.id}/review`, '리뷰 작성하기')}</section><aside class="detail-sidebar"><span class="eyebrow">TASTE NOTES</span><h3>이 한 그릇의 성격</h3>${menu.taste.map(taste => `<p>${icon('check')} ${e(taste)}</p>`).join('')}${serviceMode === 'demo' ? '<small class="muted">메뉴 소개용 샘플 정보입니다.</small>' : ''}<hr><strong>3점도 좋은 라멘입니다.</strong><p class="muted">완벽한 점수보다,<br>당신의 솔직한 취향을 들려주세요.</p><button class="text-button" data-action="guide">별점 가이드 읽기 ${icon('arrow')}</button></aside></div>`);
+    <section class="menu-detail-top">${menuPhoto(menu) ? `<button class="menu-photo-button" data-action="menu-photo" data-id="${menu.id}" aria-label="${e(menu.name)} 리뷰 사진 크게 보기">${image(menu, 'detail-image')}<span>사진 크게 보기 ${icon('search')}</span></button>` : image(menu, 'detail-image')}<div class="menu-description"><span class="eyebrow">${menu.status === 'ended' ? '판매 종료 메뉴' : 'ONE BOWL, ONE STORY'}</span><a class="shop-detail-link shop-name" href="/shops/${shop.id}">${e(shop.name)} · ${e(shop.area)} </a><h1>${e(menu.name)}</h1><div class="tags">${menu.tags.map(tag => `<a href="/explore?tag=${encodeURIComponent(tag)}">${e(tag)}</a>`).join('')}</div><p>${e(menu.description)}</p><strong class="detail-price">${price(menu.price)}</strong>${serviceMode === 'demo' ? '<p class="small-text muted">가상 메뉴 · 사진은 메뉴와 다른 참고 이미지입니다.</p>' : ''}<div class="detail-buttons"><a class="button primary" href="${own ? `/menus/${menu.id}/review` : `/shops/${shop.id}?select=${menu.id}`}">${own ? '내 리뷰 수정하기' : '이 한 그릇 기록하기'} </a><button class="button outline" data-action="save" data-id="${menu.id}" aria-pressed="${state.saved.includes(menu.id)}">${icon('bookmark')}${state.saved.includes(menu.id) ? '저장됨' : '저장'}</button></div></div></section>
+    <div class="detail-layout"><section><div class="section-heading"><h2>한 그릇의 평가 <span class="muted">${stats.count}</span></h2><button class="text-button" data-action="guide">별점 기준 </button></div><div class="rating-panel"><div class="rating-total"><strong>${score(stats.average)}</strong><span>/ 5</span><p>${stats.count ? `${stats.count}명의 솔직한 기록` : '아직 평가가 없어요'}</p>${stats.count > 0 && stats.count < 5 ? '<small class="low-count">평가가 적어요</small>' : ''}</div>${distribution(stats)}</div><div class="detail-scores">${details}</div><h2 class="reviews-title">한 줄에 담긴 진심</h2>${serviceMode === 'live' ? '<p class="muted small-text">최근 공개 리뷰 최대 100개를 표시합니다. 평균과 분포는 전체 공개 리뷰 기준입니다.</p>' : ''}${reviews.length ? reviews.slice().sort((a,b) => b.date.localeCompare(a.date)).map(review => reviewCard(review)).join('') : empty('첫 기록을 기다리고 있어요', '나만의 솔직한 한 그릇을 남겨주세요.', `/shops/${shop.id}?select=${menu.id}`, '메뉴 선택하고 리뷰 쓰기')}</section><aside class="detail-sidebar"><strong>3점도 좋은 라멘입니다.</strong><p class="muted">완벽한 점수보다,<br>당신의 솔직한 취향을 들려주세요.</p><button class="text-button" data-action="guide">별점 가이드 읽기 </button></aside></div>`);
 }
 
 function shopDetail(shop) {
   const active = menus.filter(menu => menu.shopId === shop.id && menu.status === 'active');
   const ended = menus.filter(menu => menu.shopId === shop.id && menu.status === 'ended');
   const stats = serviceMode === 'live' ? combineStats(active.map(menu => statsFor(menu.id))) : summarize(active.flatMap(menu => reviewsFor(menu.id)));
-  shell(`<nav class="breadcrumb"><a href="/explore">라멘 탐색</a><span>/</span>${e(shop.name)}</nav><section class="shop-intro"><span class="eyebrow">RAMEN SPOT · ${e(shop.area)}</span><h1 class="shop-title">${e(shop.name)}</h1><p>${e(shop.description)}</p><p class="muted">${icon('pin')} ${e(shop.address)}</p><div class="tags">${[...new Set(active.flatMap(menu => menu.tags))].map(tag => `<a href="/explore?tag=${encodeURIComponent(tag)}">${e(tag)}</a>`).join('')}</div>${serviceMode === 'demo' ? '<p class="note">체험용 가상 가게입니다. 실제 영업 정보나 길찾기를 제공하지 않습니다.</p>' : `<p class="muted">${e(shop.hours || '영업시간 미등록')}</p>${/^https:\/\//.test(shop.source_url || '') ? `<a class="text-button" href="${e(shop.source_url)}" target="_blank" rel="noopener noreferrer">공식 정보 출처 ↗</a>` : ''}`}</section><div class="section-heading"><h2>판매 중인 한 그릇</h2></div><div class="menu-grid">${active.map(card).join('')}</div><section class="shop-total"><h2>판매 중인 메뉴 종합</h2><p><strong>${score(stats.average)}</strong> · 평가 ${stats.count}명</p><p class="muted">판매 중인 메뉴의 공개 리뷰를 합산한 평균입니다. 메뉴별 평균의 단순 평균이 아닙니다.</p></section>${ended.length ? `<details class="ended-menus"><summary>판매 종료 메뉴 ${ended.length}개 보기</summary><div class="menu-grid">${ended.map(card).join('')}</div></details>` : ''}`);
+  shell(`<nav class="breadcrumb"><a href="/explore">라멘 탐색</a><span>/</span>${e(shop.name)}</nav><section class="shop-intro"><span class="eyebrow">RAMEN SPOT · ${e(shop.area)}</span><h1 class="shop-title">${e(shop.name)}</h1><p>${e(shop.description)}</p><p class="muted">${icon('pin')} ${e(shop.address)}</p><div class="tags">${[...new Set(active.flatMap(menu => menu.tags))].map(tag => `<a href="/explore?tag=${encodeURIComponent(tag)}">${e(tag)}</a>`).join('')}</div>${serviceMode === 'demo' ? '<p class="note">체험용 가상 가게입니다. 실제 영업 정보나 길찾기를 제공하지 않습니다.</p>' : `<p class="muted">${e(shop.hours || '영업시간 미등록')}</p>${/^https:\/\//.test(shop.source_url || '') ? `<a class="text-button" href="${e(shop.source_url)}" target="_blank" rel="noopener noreferrer">공식 정보 출처 ↗</a>` : ''}`}</section><div class="section-heading"><h2>먹은 메뉴를 선택해주세요</h2></div><div class="menu-picker">${active.map(menu => `<a class="menu-choice ${new URLSearchParams(location.search).get('select') === menu.id ? 'selected' : ''}" href="/menus/${e(menu.id)}/review">${image(menu)}<strong>${e(menu.name)}</strong><span>${price(menu.price)} · ${ownReview(menu.id) ? '내 리뷰 수정' : '리뷰 작성'}</span></a>`).join('')}<button class="menu-choice add-menu" data-action="add-menu" data-id="${e(shop.id)}"><span class="add-mark">+</span><strong>메뉴 추가</strong><span>먹은 메뉴가 없다면 등록해주세요</span></button></div><div class="section-heading"><h2>판매 중인 한 그릇</h2></div><div class="menu-grid">${active.map(card).join('')}</div><section class="shop-total"><h2>판매 중인 메뉴 종합</h2><p><strong>${score(stats.average)}</strong> · 평가 ${stats.count}명</p><p class="muted">판매 중인 메뉴의 공개 리뷰를 합산한 평균입니다. 메뉴별 평균의 단순 평균이 아닙니다.</p></section>${ended.length ? `<details class="ended-menus"><summary>판매 종료 메뉴 ${ended.length}개 보기</summary><div class="menu-grid">${ended.map(card).join('')}</div></details>` : ''}`);
+  if (serviceMode === 'live') mountShopMap(shop);
 }
 
 function login() {
-  if (serviceMode === 'live') return shell(`<section class="login-panel"><span class="eyebrow">나의 라멘 기록</span><h1>먹어본 한 그릇을<br>기록해보세요.</h1><p class="muted">카카오 계정으로 로그인하면 저장한 메뉴와 리뷰를 다른 기기에서도 볼 수 있어요.</p><p class="login-policies"><a href="/terms">이용약관</a>, <a href="/privacy">개인정보처리방침</a>, <a href="/community">리뷰 운영정책</a>을 확인해주세요.</p><label class="consent"><input id="accept-terms" type="checkbox"> 이용약관을 확인하고 동의합니다.</label><label class="consent"><input id="confirm-age" type="checkbox"> 만 14세 이상입니다.</label>${!launchReady ? '<p class="note">운영 정보를 준비 중입니다. 신규 로그인은 아직 열리지 않았습니다.</p>' : ''}<button class="button primary full" data-action="start-login" ${!launchReady ? 'disabled' : ''}>카카오로 로그인</button><a class="subtle-link" href="/explore">먼저 둘러보기</a></section>`, 'me');
-  shell(`<section class="login-panel"><div class="login-symbol">${icon('bowl')}</div><span class="eyebrow">YOUR RAMEN JOURNAL</span><h1>나만의 한 그릇을<br>기록해보세요.</h1><p class="muted">먹고 싶은 라멘을 저장하고,<br>솔직한 취향을 한 줄씩 남겨보세요.</p><div class="note"><strong>현재는 로컬 체험 모드입니다.</strong><p>실제 회원가입이나 소셜 로그인이 아닙니다. 리뷰와 저장 목록은 이 브라우저에만 보관되며 다른 기기와 공유되지 않습니다.</p></div><p class="login-policies">시작 전에 <a href="/terms">이용약관</a>과 <a href="/privacy">개인정보처리방침</a>, <a href="/community">리뷰 운영정책</a>을 확인해주세요.</p><button class="button primary full" data-action="start-demo">브라우저 체험 시작하기 ${icon('arrow')}</button><a class="subtle-link" href="/explore">먼저 둘러볼게요</a></section>`, 'me');
+  if (serviceMode === 'live') {
+    const p = new URLSearchParams(location.search), mode = p.get('mode') || 'login';
+    const label = { login: '로그인', signup: '회원가입', recover: '비밀번호 재설정 메일', resend: '인증 메일 다시 받기', reset: '새 비밀번호 저장', verify: '이메일 인증 완료하기' }[mode] || '로그인';
+    shell(`<section class="login-panel"><h1>${label}</h1><form id="auth-form" data-mode="${e(mode)}">${!['reset','verify'].includes(mode) ? '<label class="field-label" for="auth-email">이메일</label><input id="auth-email" name="email" type="email" autocomplete="email" required maxlength="254">' : ''}${['login','signup','reset'].includes(mode) ? '<label class="field-label" for="auth-password">비밀번호</label><input id="auth-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" required><p class="field-help">12~128자로 입력해주세요.</p>' : ''}${mode === 'signup' ? nicknameInput(generatedNickname()) + '<label class="consent"><input name="agreed" type="checkbox" required> 이용약관에 동의합니다.</label><label class="consent"><input name="ageConfirmed" type="checkbox" required> 만 14세 이상입니다.</label>' : ''}<p class="login-policies"><a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a></p><p id="auth-message" role="status"></p><button class="button primary full" type="submit" ${!launchReady ? 'disabled' : ''}>${label}</button></form>${!launchReady ? '<p class="note">운영 설정을 준비 중입니다.</p>' : ''}<nav class="auth-links"><a href="/login">로그인</a><a href="/login?mode=signup">회원가입</a><a href="/login?mode=recover">비밀번호 찾기</a><a href="/login?mode=resend">인증 메일 재발송</a></nav></section>`, 'me');
+    return;
+  }
+  shell(`<section class="login-panel"><div class="login-symbol">${icon('bowl')}</div><span class="eyebrow">YOUR RAMEN JOURNAL</span><h1>나만의 한 그릇을<br>기록해보세요.</h1><p class="muted">먹고 싶은 라멘을 저장하고,<br>솔직한 취향을 한 줄씩 남겨보세요.</p><div class="note"><strong>현재는 로컬 체험 모드입니다.</strong><p>실제 회원가입이나 소셜 로그인이 아닙니다. 리뷰와 저장 목록은 이 브라우저에만 보관되며 다른 기기와 공유되지 않습니다.</p></div><p class="login-policies">시작 전에 <a href="/terms">이용약관</a>과 <a href="/privacy">개인정보처리방침</a>, <a href="/community">리뷰 운영정책</a>을 확인해주세요.</p><button class="button primary full" data-action="start-demo">브라우저 체험 시작하기 </button><a class="subtle-link" href="/explore">먼저 둘러볼게요</a></section>`, 'me');
 }
 
 async function adminPage() {
@@ -255,16 +283,18 @@ async function adminPage() {
   if (!user.admin) return shell(empty('접근 권한이 없습니다', '운영 관리자만 이용할 수 있습니다.'));
   try {
     const data = await request('admin');
+    photoDraft=[];
     if (location.pathname !== '/admin') return;
     const queue = (items, type) => items.map(item => `<article class="admin-item"><strong>${e(item.name || item.review_id)}</strong><p>${e(item.note || item.reason)}</p><span class="muted">${e(item.status)}</span>${item.status === 'pending' ? `<button class="button outline" data-action="admin-resolve" data-type="${type}" data-id="${e(item.id)}">처리 완료</button>` : ''}</article>`).join('') || '<p class="muted">접수된 항목이 없습니다.</p>';
-    shell(`<section class="page-intro"><h1>운영 관리</h1><p>신고만으로 리뷰를 자동 숨기지 않습니다. 내용을 검토하고 조치해주세요.</p></section><section><h2>신고 접수 · 최근 100개</h2>${queue(data.reports, 'report')}</section><section><h2>가게·메뉴 등록 요청 · 최근 100개</h2>${queue(data.requests, 'request')}</section><section><h2>리뷰 검토 · 최근 100개</h2>${data.reviews.map(r => `<article class="admin-item"><a class="shop-name" href="/menus/${e(r.menuId)}">메뉴 확인</a><p>${e(r.body || '본문 없음')} · ${r.rating}점</p><label class="field-label" for="reason-${e(r.id)}">조치 사유</label><input id="reason-${e(r.id)}" maxlength="1000" aria-label="조치 사유"><button class="button outline" data-action="admin-review" data-id="${e(r.id)}" data-hidden="${!r.hidden}">${r.hidden ? '다시 공개' : '숨김 처리'}</button></article>`).join('') || '<p>리뷰가 없습니다.</p>'}</section><section><h2>메뉴 판매 상태</h2>${menus.map(menu => `<article class="admin-item"><strong>${e(menu.name)}</strong> · ${e(shopOf(menu).name)}<button class="button outline" data-action="menu-status" data-id="${e(menu.id)}" data-status="${menu.status === 'active' ? 'ended' : 'active'}">${menu.status === 'active' ? '판매 종료로 변경' : '판매 재개'}</button></article>`).join('')}</section><section class="admin-forms"><form id="admin-shop-form"><h2>가게 등록</h2>${[['name','가게명'],['area','지역'],['address','주소'],['lat','위도'],['lng','경도'],['hours','영업시간'],['source_url','정보 출처 URL'],['description','소개']].map(([name,label]) => `<label class="field-label" for="shop-${name}">${label}</label><input id="shop-${name}" name="${name}" ${['name','area','address'].includes(name) ? 'required' : ''} ${['lat','lng'].includes(name) ? 'type="number" step="any"' : name === 'source_url' ? 'type="url"' : ''} maxlength="2000">`).join('')}<button type="submit" class="button primary">가게 등록</button></form><form id="admin-menu-form"><h2>메뉴 등록</h2><label class="field-label" for="menu-shop">소속 가게</label><select id="menu-shop" name="shop_id" required><option value="">가게 선택</option>${shops.map(shop => `<option value="${e(shop.id)}">${e(shop.name)} · ${e(shop.area)}</option>`).join('')}</select>${[['name','메뉴명'],['price','가격'],['tags','태그 (쉼표로 구분)'],['image','사용 권한이 있는 사진 URL'],['description','메뉴 소개']].map(([name,label]) => `<label class="field-label" for="menu-${name}">${label}</label><input id="menu-${name}" name="${name}" ${['name','price'].includes(name) ? 'required' : ''} ${name === 'price' ? 'type="number" min="0" max="10000000" step="1"' : name === 'image' ? 'type="url"' : ''} maxlength="2000">`).join('')}<label class="field-label" for="menu-status">판매 상태</label><select id="menu-status" name="status"><option value="active">판매 중</option><option value="ended">판매 종료</option></select><button type="submit" class="button primary">메뉴 등록</button></form></section>`, 'admin');
+    shell(`<section class="page-intro"><h1>운영 관리</h1><p>신고만으로 리뷰를 자동 숨기지 않습니다. 내용을 검토하고 조치해주세요.</p></section><section><h2>신고 접수 · 최근 100개</h2>${queue(data.reports, 'report')}</section><section><h2>가게·메뉴 등록 요청 · 최근 100개</h2>${data.requests.map(registrationCard).join('') || '<p>가게 요청이 없습니다.</p>'}</section><section><h2>리뷰 검토 · 최근 100개</h2>${data.reviews.map(r => `<article class="admin-item"><a class="shop-name" href="/menus/${e(r.menuId)}">메뉴 확인</a><p>${e(r.body || '본문 없음')} · ${r.rating}점</p><label class="field-label" for="reason-${e(r.id)}">조치 사유</label><input id="reason-${e(r.id)}" maxlength="1000" aria-label="조치 사유"><button class="button outline" data-action="admin-review" data-id="${e(r.id)}" data-hidden="${!r.hidden}">${r.hidden ? '다시 공개' : '숨김 처리'}</button>${r.privacyPending ? `<p class="note">탈퇴 후 보존된 자료입니다. 본문과 모든 사진의 개인정보·권리를 확인한 뒤 공개해주세요.</p>${r.photos.map(src => `<img class="privacy-photo" src="${e(src)}" alt="개인정보 점검용 사진">`).join('')}<label><input type="checkbox" id="privacy-${e(r.id)}"> 개인정보 점검을 완료했습니다</label><button class="button outline" data-action="privacy-approve" data-id="${e(r.id)}">점검 후 공개</button>` : ''}</article>`).join('') || '<p>리뷰가 없습니다.</p>'}</section><section><h2>메뉴 판매 상태</h2>${menus.map(menu => `<article class="admin-item"><strong>${e(menu.name)}</strong> · ${e(shopOf(menu).name)}<button class="button outline" data-action="menu-status" data-id="${e(menu.id)}" data-status="${menu.status === 'active' ? 'ended' : 'active'}">${menu.status === 'active' ? '판매 종료로 변경' : '판매 재개'}</button></article>`).join('')}</section><section class="admin-forms"><form id="admin-shop-form"><h2>가게 등록</h2>${[['name','가게명'],['area','지역'],['address','주소'],['lat','위도'],['lng','경도'],['hours','영업시간'],['source_url','정보 출처 URL'],['description','소개']].map(([name,label]) => `<label class="field-label" for="shop-${name}">${label}</label><input id="shop-${name}" name="${name}" ${['name','area','address'].includes(name) ? 'required' : ''} ${['lat','lng'].includes(name) ? 'type="number" step="any"' : name === 'source_url' ? 'type="url"' : ''} maxlength="2000">`).join('')}<button type="submit" class="button primary">가게 등록</button></form><form id="admin-menu-form"><h2>메뉴 등록</h2><label class="field-label" for="menu-shop">소속 가게</label><select id="menu-shop" name="shop_id" required><option value="">가게 선택</option>${shops.map(shop => `<option value="${e(shop.id)}">${e(shop.name)} · ${e(shop.area)}</option>`).join('')}</select>${[['name','메뉴명'],['price','가격'],['tags','태그 (쉼표로 구분)'],['description','메뉴 소개']].map(([name,label]) => `<label class="field-label" for="menu-${name}">${label}</label><input id="menu-${name}" name="${name}" ${['name','price'].includes(name) ? 'required' : ''} ${name === 'price' ? 'type="number" min="0" max="10000000" step="1"' : name === 'image' ? 'type="url"' : ''} maxlength="2000">`).join('')}<label class="field-label" for="admin-menu-genre">장르 · 필수</label><select id="admin-menu-genre" name="genre" required><option value="">장르 선택</option>${genres.map(g=>`<option>${g}</option>`).join('')}</select><label class="field-label" for="menu-photos">사진 · 필수</label><input id="menu-photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><div id="photo-drafts" class="photo-drafts"></div><p class="note">추가한 사진은 메뉴의 리뷰 작성으로 이어집니다.</p><label class="field-label" for="menu-status">판매 상태</label><select id="menu-status" name="status"><option value="active">판매 중</option><option value="ended">판매 종료</option></select><button type="submit" class="button primary">메뉴 등록</button></form></section>`, 'admin');
   } catch (error) { shell(empty('운영 정보를 불러오지 못했어요', e(error.message), '/admin', '다시 시도')); }
 }
 
 function profile() {
   if (!state.active) { login(); return; }
   const stats = summarize(state.reviews.filter(r => r.userId === (user?.id || demoId)));
-  shell(`<section class="page-intro"><span class="eyebrow">MY RAMEN JOURNAL</span><h1>차곡차곡, 나의 라멘 기록</h1><p>${serviceMode === 'live' ? '내 계정으로 남긴 라멘 기록입니다.' : '이 브라우저에 남긴 나만의 취향입니다.'}</p></section><div class="profile-summary"><div><strong>${stats.count}</strong><span>기록한 한 그릇</span></div><div><strong>${state.saved.length}</strong><span>저장한 메뉴</span></div><div><strong>${score(stats.average)}</strong><span>내 평균 별점</span></div></div><section class="profile-distribution"><h2>나의 별점 분포</h2>${distribution(stats)}</section><div class="section-heading"><h2>내가 남긴 리뷰</h2><button class="text-button" data-action="logout">${serviceMode === 'live' ? '로그아웃' : '체험 종료'}</button></div>${state.reviews.some(r => r.userId === (user?.id || demoId)) ? `<div class="recent-grid">${state.reviews.filter(r => r.userId === (user?.id || demoId)).map(review => reviewCard(review, true)).join('')}</div>` : empty('아직 기록이 없어요', '기억에 남는 한 그릇을 찾아보세요.')}<p class="note">${serviceMode === 'live' ? '리뷰를 수정하거나 삭제할 수 있습니다. 계정 관련 문의는 개인정보처리방침의 연락처를 이용해주세요.' : '체험을 종료해도 기록은 이 브라우저에 남습니다. 사이트 저장 데이터를 지우면 기록이 삭제됩니다.'}</p>`, 'me');
+  const account = accountPanel();
+  shell(`<section class="page-intro"><span class="eyebrow">MY RAMEN JOURNAL</span><h1>차곡차곡, 나의 라멘 기록</h1><p>${serviceMode === 'live' ? '내 계정으로 남긴 라멘 기록입니다.' : '이 브라우저에 남긴 나만의 취향입니다.'}</p></section><div class="profile-summary"><div><strong>${stats.count}</strong><span>기록한 한 그릇</span></div><div><strong>${state.saved.length}</strong><span>저장한 메뉴</span></div><div><strong>${score(stats.average)}</strong><span>내 평균 별점</span></div></div>${account}<section class="profile-distribution"><h2>나의 별점 분포</h2>${distribution(stats)}</section><div class="section-heading"><h2>내가 남긴 리뷰</h2><button class="text-button" data-action="logout">${serviceMode === 'live' ? '로그아웃' : '체험 종료'}</button></div>${state.reviews.some(r => r.userId === (user?.id || demoId)) ? `<div class="recent-grid">${state.reviews.filter(r => r.userId === (user?.id || demoId)).map(review => reviewCard(review, true)).join('')}</div>` : empty('아직 기록이 없어요', '기억에 남는 한 그릇을 찾아보세요.')}<p class="note">${serviceMode === 'live' ? '리뷰를 수정하거나 삭제할 수 있습니다. 계정 관련 문의는 개인정보처리방침의 연락처를 이용해주세요.' : '체험을 종료해도 기록은 이 브라우저에 남습니다. 사이트 저장 데이터를 지우면 기록이 삭제됩니다.'}</p>`, 'me');
 }
 
 function savedPage() {
@@ -276,13 +306,13 @@ function savedPage() {
 function reviewPage(menu) {
   if (!requireDemo()) return;
   const existing = ownReview(menu.id);
-  photoDraft = (existing?.photos || []).filter(photoSrc);
+  photoDraft = (existing?.photos || draftPhotos.get(menu.id) || state.newPhotos[menu.id] || JSON.parse(sessionStorage.getItem('ramenmukja-photo-draft:' + menu.id) || '[]')).filter(photoSrc);
   const rating = existing?.rating || 0;
-  shell(`<div class="form-page"><a class="subtle-link" href="/menus/${menu.id}">← 메뉴로 돌아가기</a><span class="eyebrow">ONE HONEST NOTE</span><h1>한 그릇의 기억을 남겨요.</h1><div class="review-target">${image(menu)}<div><strong>${e(menu.name)}</strong><p>${shopLink(shopOf(menu))}</p></div></div><form id="review-form" data-menu="${menu.id}"><fieldset class="rating-field"><legend>어떤 한 그릇이었나요? <span class="required">필수</span></legend><div class="star-input">${[1,2,3,4,5].map(n => `<label class="star-label ${n <= rating ? 'filled' : ''}"><input type="radio" name="rating" value="${n}" required ${n === rating ? 'checked' : ''} aria-describedby="rating-description"><span aria-hidden="true">★</span><span class="sr-only">${n}점 · ${ratingLabels[n]}</span></label>`).join('')}</div><p id="rating-description" aria-live="polite">${rating ? ratingLabels[rating] : '별점을 선택하면 점수의 의미를 알려드려요.'}</p><button type="button" class="text-button" data-action="guide">3점도 좋은 라멘입니다. 별점 기준 보기</button></fieldset>
+  shell(`<div class="form-page"><a class="subtle-link" href="/menus/${menu.id}">← 메뉴로 돌아가기</a><span class="eyebrow">ONE HONEST NOTE</span><h1>한 그릇의 기억을 남겨요.</h1><div class="review-target">${image(menu)}<div><strong>${e(menu.name)}</strong><p>${shopLink(shopOf(menu))}</p></div></div>${reviewDraftPreview()}<form id="review-form" data-menu="${menu.id}"><fieldset class="rating-field"><legend>어떤 한 그릇이었나요? <span class="required">필수</span></legend><div class="star-input">${[1,2,3,4,5].map(n => `<label class="star-label ${n <= rating ? 'filled' : ''}"><input type="radio" name="rating" value="${n}" required ${n === rating ? 'checked' : ''} aria-describedby="rating-description"><span aria-hidden="true">★</span><span class="sr-only">${n}점 · ${ratingLabels[n]}</span></label>`).join('')}</div><p id="rating-description" aria-live="polite">${rating ? ratingLabels[rating] : '별점을 선택하면 점수의 의미를 알려드려요.'}</p><button type="button" class="text-button" data-action="guide">3점도 좋은 라멘입니다. 별점 기준 보기</button></fieldset>
     <label class="field-label" for="review-body">한 줄에 담긴 진심 <span id="body-required">${rating === 5 ? '필수 · 5점의 특별한 이유' : '선택'}</span></label><textarea id="review-body" name="body" rows="5" maxlength="2000" placeholder="국물의 첫인상, 면의 식감, 기억에 남는 순간을 들려주세요." ${rating === 5 ? 'required' : ''}>${e(existing?.body || '')}</textarea><p class="field-help">5점은 인생의 한 그릇에. 특별했던 이유를 함께 남겨주세요.</p>
-    <details class="optional-details"><summary>국물·면·고명도 기록하기 <span>선택</span></summary><p class="field-help">추가 토핑보다 기본 구성에 대해 평가해주세요. 전체 별점과 별도로 표시됩니다.</p><div class="detail-form-grid">${[['broth','국물'],['noodle','면'],['topping','고명']].filter(([key]) => key !== 'broth' || !menu.tags.includes('아부라소바')).map(([key,label]) => `<label>${label}<select name="${key}"><option value="">평가 안 함</option>${[1,2,3,4,5].map(n => `<option value="${n}" ${existing?.details?.[key] === n ? 'selected' : ''}>${n}점</option>`).join('')}</select></label>`).join('')}</div><div class="detail-form-grid">${[['intensity','진하기',['담백해요','적당해요','진해요']],['saltiness','짠맛',['싱거워요','적당해요','짭짤해요']],['texture','면 식감',['부드러워요','쫄깃해요','단단해요']]].filter(([key]) => key !== 'intensity' || !menu.tags.includes('아부라소바')).map(([key,label,options]) => `<label>${label}<select name="${key}"><option value="">선택 안 함</option>${options.map(value => `<option ${existing?.taste?.[key] === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label>`).join('')}</div></details>
-    <label class="field-label" for="photos">사진 <span>선택 · 최대 5장</span></label><input type="file" id="photos" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">장당 10MB 이하. 저장 시 사진을 줄이고 위치 정보를 제거합니다.</p><div id="photo-drafts" class="photo-drafts"></div>
-    <fieldset class="disclosure"><legend>식사 제공·협찬 여부 <span class="required">필수</span></legend><label><input type="radio" name="disclosure" value="self" required ${existing?.disclosure === 'self' ? 'checked' : ''}> 직접 결제했어요</label><label><input type="radio" name="disclosure" value="sponsored" required ${existing?.disclosure === 'sponsored' ? 'checked' : ''}> 식사 제공·협찬을 받았어요</label></fieldset><p id="form-error" class="form-error" role="alert"></p><p class="note">${serviceMode === 'live' ? '저장한 리뷰와 사진은 다른 이용자에게 공개됩니다. 개인정보를 포함하지 마세요.' : '로컬 체험 기록입니다. 이 브라우저에만 저장됩니다.'}</p><button type="submit" class="button primary full">${existing ? '리뷰 수정하기' : '한 그릇 기록하기'} ${icon('arrow')}</button></form></div>`);
+    <details class="optional-details"><summary>더 자세히 기록하기 <span>선택</span></summary><p class="field-help">추가 토핑보다 기본 구성에 대해 평가해주세요. 전체 별점과 별도로 표시됩니다.</p><div class="detail-form-grid">${[['broth','국물'],['noodle','면'],['topping','고명']].filter(([key]) => key !== 'broth' || !menu.tags.includes('아부라소바')).map(([key,label]) => `<label>${label}<select name="${key}"><option value="">평가 안 함</option>${[1,2,3,4,5].map(n => `<option value="${n}" ${existing?.details?.[key] === n ? 'selected' : ''}>${n}점</option>`).join('')}</select></label>`).join('')}</div></details>
+    ${optionEditor('order-options', existing?.options)}<label class="field-label" for="photos">사진 <span>선택 · 최대 5장</span></label><input type="file" id="photos" accept="image/jpeg,image/png,image/webp" multiple><p class="field-help">장당 10MB 이하. 저장 시 사진을 줄이고 위치 정보를 제거합니다.</p><div id="photo-drafts" class="photo-drafts"></div>
+    <p id="form-error" class="form-error" role="alert"></p><p class="note">${serviceMode === 'live' ? '저장한 리뷰와 사진은 다른 이용자에게 공개됩니다. 개인정보를 포함하지 마세요.' : '로컬 체험 기록입니다. 이 브라우저에만 저장됩니다.'}</p><button type="submit" class="button primary full">${existing ? '리뷰 수정하기' : '한 그릇 기록하기'} </button></form></div>`);
   renderPhotoDrafts();
 }
 
@@ -298,7 +328,7 @@ async function render() {
   if (route === '/') return home();
   if (route === '/explore') return explore();
   if (route === '/saved') return savedPage();
-  if (route === '/me') return profile();
+  if (route === '/me') { const draft = new URLSearchParams(location.search).get('draft'); return draft ? draftPage(draft) : profile(); }
   if (route === '/login') return login();
   if (Object.hasOwn(legalDocuments, route.slice(1))) return legalPage(route.slice(1));
   if (route === '/admin') return adminPage();
@@ -353,12 +383,6 @@ document.addEventListener('click', async event => {
   if (action === 'guide') return ratingGuide();
   if (action === 'locate') return locate();
   if (action === 'tag') return updateSearch({ tag: button.dataset.tag });
-  if (action === 'start-login') {
-    button.disabled = true;
-    try { const result = await request('auth/login', 'POST', { next: new URLSearchParams(location.search).get('next'), agreed: document.querySelector('#accept-terms')?.checked === true, ageConfirmed: document.querySelector('#confirm-age')?.checked === true }); location.assign(result.url); }
-    catch (error) { notify(error.message); button.disabled = false; }
-    return;
-  }
   if (action === 'menu-status') {
     try { await request('admin', 'POST', { type: 'menu-status', id, status: button.dataset.status }); await refreshService(); await adminPage(); } catch (error) { notify(error.message); }
     return;
@@ -396,7 +420,7 @@ document.addEventListener('click', async event => {
     showModal(`<span class="eyebrow">FIND YOUR NEIGHBORHOOD</span><h2 id="modal-title">어디에서 먹을까요?</h2><form id="filter-form"><label class="field-label" for="area">지역</label><select name="area" id="area"><option value="">모든 지역</option>${[...new Set(shops.map(shop => shop.area))].map(area => `<option ${p.get('area') === area ? 'selected' : ''}>${e(area)}</option>`).join('')}</select>${serviceMode === 'demo' ? '<p class="note">초기 체험은 마포 지역의 가상 가게로 구성됩니다.</p>' : ''}<button class="button primary full">필터 적용</button></form>`);
     modal.classList.add('filter-sheet');
   }
-  if (action === 'map') showModal(`<h2 id="modal-title">지도 연결을 준비하고 있어요.</h2><p>${serviceMode === 'live' ? '지도 공급자 연결을 준비 중입니다. 지역 필터와 가게 주소를 이용해주세요.' : '지도 공급자는 아직 정해지지 않았습니다. 현재는 가상 가게로 목록과 거리 탐색을 체험할 수 있어요.'}</p><p class="note">실제 가게 위치나 길찾기로 오해할 수 있는 샘플 지도는 제공하지 않습니다.</p><button class="button primary full" data-action="close-modal">목록으로 둘러보기</button>`);
+  if (action === 'map') { if (serviceMode === 'live') return updateSearch({view:new URLSearchParams(location.search).get('view') === 'map' ? 'list' : 'map'}); return showMapList(); }
   if (action === 'delete') showModal(`<h2 id="modal-title">이 기록을 삭제할까요?</h2><p>삭제한 리뷰는 이 브라우저에서 복구할 수 없습니다.</p><button class="button danger full" data-action="confirm-delete" data-id="${e(id)}">리뷰 삭제하기</button>`);
   if (action === 'confirm-delete') {
     try {
@@ -408,7 +432,7 @@ document.addEventListener('click', async event => {
   if (action === 'remove-photo') { photoDraft.splice(Number(button.dataset.index), 1); renderPhotoDrafts(); }
   if (action === 'menu-photo') {
     const menu = menus.find(item => item.id === id);
-    if (menu?.image) showModal(`<h2 id="modal-title">${e(menu.name)} 참고 사진</h2><img class="expanded-photo" src="${e(menu.image)}" alt="${e(menu.name)} 참고 사진"><p class="muted">실제 메뉴와 다른 참고 이미지입니다.</p>`);
+    if (menu && menuPhoto(menu)) showModal(`<h2 id="modal-title">${e(menu.name)} 리뷰 사진</h2><img class="expanded-photo" src="${e(menuPhoto(menu))}" alt="${e(menu.name)} 리뷰 사진">`);
   }
   if (action === 'photo') {
     const review = [...seedReviews, ...state.reviews].find(item => item.id === button.dataset.review);
@@ -419,15 +443,14 @@ document.addEventListener('click', async event => {
     if (!requireDemo()) return;
     showModal(`<h2 id="modal-title">${serviceMode === 'live' ? '리뷰 신고' : '리뷰 신고 기록'}</h2><p class="note">${serviceMode === 'live' ? '신고 사유를 운영자가 검토합니다. 처리 결과는 운영 문의로 확인할 수 있습니다.' : '체험 기능입니다. 실제 운영자에게 전달되지 않으며 이 브라우저에만 기록됩니다.'}</p><form id="report-form" data-review="${e(id)}"><label class="field-label" for="reason">신고 사유</label><textarea id="reason" name="reason" required maxlength="500" rows="3" placeholder="확인이 필요한 내용을 알려주세요."></textarea><button class="button primary full">${serviceMode === 'live' ? '신고 접수하기' : '체험 신고 기록하기'}</button></form>`);
   }
-  if (action === 'request') {
-    if (!requireDemo()) return;
-    showModal(`<h2 id="modal-title">가게·메뉴 등록 요청</h2><p class="note">${serviceMode === 'live' ? '등록 요청을 운영자에게 전달합니다. 검토 후 가게·메뉴가 등록됩니다.' : '이 브라우저에만 저장하는 체험 기능입니다. 실제 등록 요청은 전달되지 않습니다.'}</p><form id="request-form"><label class="field-label" for="request-name">가게·메뉴명</label><input id="request-name" name="name" maxlength="100" required><label class="field-label" for="request-note">지역과 추가 정보</label><textarea id="request-note" name="note" rows="3" maxlength="1000" required></textarea><button class="button primary full">${serviceMode === 'live' ? '등록 요청하기' : '체험 요청 저장하기'}</button></form>`);
-  }
+  if (action === 'request') { if (requireDemo()) openShopRequest(); return; }
+
 });
 
 document.addEventListener('change', async event => {
   const target = event.target;
   if (target.id === 'sort') return updateSearch({ sort: target.value, min: target.value === 'rating' ? '1' : '' });
+  if (target.id === 'existing-draft-menu') { const form=target.closest('form'); for (const name of ['name','price','genre']) form.elements[name].required = !target.value; return; }
   if (target.id === 'minimum') return updateSearch({ min: target.checked ? '1' : '0' });
   if (target.name === 'rating') {
     const rating = Number(target.value);
@@ -436,10 +459,10 @@ document.addEventListener('change', async event => {
     document.querySelector('#review-body').required = rating === 5;
     document.querySelector('#body-required').textContent = rating === 5 ? '필수 · 5점의 특별한 이유' : '선택';
   }
-  if (target.id === 'photos') {
+  if (['photos','menu-photos','draft-photos'].includes(target.id)) {
     const files = [...target.files];
     if (files.length + photoDraft.length > 5) { target.value = ''; return notify('사진은 최대 5장까지 첨부할 수 있어요.'); }
-    const submit = document.querySelector('#review-form button[type="submit"]');
+    const submit = target.closest('form').querySelector('button[type="submit"]');
     target.disabled = true; submit.disabled = true;
     try {
       const converted = [];
@@ -459,9 +482,64 @@ document.addEventListener('change', async event => {
   }
 });
 
+function optionTagList(value, editable = false) {
+  return optionTags(value).map((tag, index) => `<span class="option-tag">${e('#' + tag)}${editable ? `<button type="button" data-option-remove="${index}" aria-label="${e('#' + tag)} 삭제">${icon('close')}</button>` : ''}</span>`).join('');
+}
+
+function optionEditor(id, value) {
+  return `<label class="field-label" for="${id}">주문 옵션 <span>선택</span></label><div class="option-editor" data-option-editor><div class="option-tag-list" aria-live="polite">${optionTagList(value, true)}</div><input type="hidden" name="options" value="${e(value || '')}"><div class="option-entry"><input id="${id}" data-option-input maxlength="300" placeholder="예: #곱빼기, #차슈추가" aria-describedby="${id}-help"><button type="button" class="button outline" data-option-add>추가</button></div><p class="field-help" id="${id}-help">입력 후 Enter 또는 추가를 눌러주세요. 태그 전체 300자 이내.</p><p class="form-error" data-option-error role="alert"></p></div>`;
+}
+
+function addOptionTags(editor) {
+  const input = editor.querySelector('[data-option-input]');
+  const hidden = editor.querySelector('[name=options]');
+  const value = serializeOptions([...optionTags(hidden.value), ...optionTags(input.value)]);
+  const error = editor.querySelector('[data-option-error]');
+  if (value.length > 300) {
+    error.textContent = '주문 옵션은 #과 공백을 포함해 전체 300자 이내로 입력해주세요.';
+    input.focus();
+    return false;
+  }
+  hidden.value = value;
+  editor.querySelector('.option-tag-list').innerHTML = optionTagList(value, true);
+  input.value = '';
+  error.textContent = '';
+  return true;
+}
+
+document.addEventListener('keydown', event => {
+  if (!event.target.matches('[data-option-input]') || event.isComposing || event.key !== 'Enter') return;
+  event.preventDefault();
+  addOptionTags(event.target.closest('[data-option-editor]'));
+});
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-option-add], [data-option-remove]');
+  if (!button) return;
+  const editor = button.closest('[data-option-editor]');
+  if (button.hasAttribute('data-option-add')) {
+    addOptionTags(editor);
+  } else {
+    const hidden = editor.querySelector('[name=options]');
+    hidden.value = serializeOptions(optionTags(hidden.value).filter((_, i) => i !== Number(button.dataset.optionRemove)));
+    editor.querySelector('.option-tag-list').innerHTML = optionTagList(hidden.value, true);
+    editor.querySelector('[data-option-error]').textContent = '';
+  }
+  editor.querySelector('[data-option-input]').focus();
+});
+
+// Commit unfinished input before either form's existing FormData handler runs.
+document.addEventListener('submit', event => {
+  const editor = event.target.querySelector('[data-option-editor]');
+  if (editor && !addOptionTags(editor)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
+
 document.addEventListener('submit', async event => {
   const form = event.target;
-  if (!['search-form','filter-form','review-form','report-form','request-form','admin-shop-form','admin-menu-form'].includes(form.id)) return;
+  if (!['search-form','filter-form','review-form','report-form','admin-shop-form','admin-menu-form'].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   if (form.id.startsWith('admin-')) {
@@ -469,7 +547,7 @@ document.addEventListener('submit', async event => {
     const record = Object.fromEntries(data);
     if (form.id === 'admin-menu-form') { record.price = Number(record.price); record.tags = record.tags.split(',').map(x => x.trim()).filter(Boolean); record.taste = []; }
     else for (const field of ['lat','lng']) record[field] = record[field] === '' ? null : Number(record[field]);
-    try { await request('admin', 'POST', { type: form.id === 'admin-shop-form' ? 'shop' : 'menu', record }); await refreshService(); await adminPage(); notify('등록했습니다.'); }
+    try { if(form.id==='admin-menu-form') { const error=validateMenu({...record,photos:photoDraft}); if(error)throw Error(error); record.photos=await uploadedPhotos(); } const result=await request('admin', 'POST', { type: form.id === 'admin-shop-form' ? 'shop' : 'menu', record }); if(result.menu) { draftPhotos.set(result.menu.id,record.photos); sessionStorage.setItem('ramenmukja-photo-draft:'+result.menu.id,JSON.stringify(record.photos)); await refreshService(); navigate('/menus/'+result.menu.id+'/review'); return; } await refreshService(); await adminPage(); notify('등록했습니다.'); }
     catch (error) { notify(error.message); submit.disabled = false; }
     return;
   }
@@ -479,8 +557,8 @@ document.addEventListener('submit', async event => {
     if (!state.active) return notify(serviceMode === 'live' ? '로그인 상태를 확인해주세요. 입력 내용은 그대로 남아 있습니다.' : '체험 모드를 먼저 시작해주세요. 입력 내용은 그대로 남아 있습니다.');
     const menuId = form.dataset.menu, existing = ownReview(menuId);
     const details = Object.fromEntries(['broth','noodle','topping'].filter(key => data.get(key)).map(key => [key, Number(data.get(key))]));
-    const taste = Object.fromEntries(['intensity','saltiness','texture'].filter(key => data.get(key)).map(key => [key, data.get(key)]));
-    const review = { id: existing?.id || crypto.randomUUID(), menuId, rating: Number(data.get('rating')), body: String(data.get('body')).trim(), disclosure: data.get('disclosure'), details, taste, photos: [...photoDraft], author: '나의 라멘일기', date: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) };
+
+    const review = { id: existing?.id || crypto.randomUUID(), menuId, rating: Number(data.get('rating')), body: String(data.get('body')).trim(), options: String(data.get('options') || '').trim(), details, photos: [...photoDraft], author: state.nickname || '나의 라멘일기', date: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' }) };
     const error = validateReview(review);
     if (error) { document.querySelector('#form-error').textContent = error; return; }
     const submit = form.querySelector('button[type="submit"]');
@@ -488,11 +566,12 @@ document.addEventListener('submit', async event => {
     try {
       if (serviceMode === 'live') {
         const photos = [];
-        for (const photo of photoDraft) photos.push(photo.startsWith('/api/photos/') ? photo : (await request('photos', 'POST', { data: photo })).url);
-        await request('reviews', 'PUT', { ...review, photos }); await refreshService(); navigate(`/menus/${menuId}`); notify('리뷰를 저장했어요.'); return;
+        for (let i = 0; i < photoDraft.length; i++) { if (!photoDraft[i].startsWith('/api/photos/')) photoDraft[i] = (await request('photos', 'POST', { data: photoDraft[i] })).url; photos.push(photoDraft[i]); }
+        await request('reviews', 'PUT', { ...review, photos }); sessionStorage.removeItem('ramenmukja-photo-draft:' + menuId); await refreshService(); navigate(`/menus/${menuId}`); notify('리뷰를 저장했어요.'); return;
       }
       const reviews = upsertReview(state.reviews, review, demoId);
-      if (persist({ ...state, reviews })) { navigate(`/menus/${menuId}`); notify(existing ? '기록을 수정하고 평가에 반영했어요.' : '한 그릇의 기록을 남겼어요.'); }
+      const newPhotos = { ...state.newPhotos }; delete newPhotos[menuId];
+      if (persist({ ...state, reviews, newPhotos })) { navigate(`/menus/${menuId}`); notify(existing ? '기록을 수정하고 평가에 반영했어요.' : '한 그릇의 기록을 남겼어요.'); }
     } catch (error) { document.querySelector('#form-error').textContent = error.message; }
     finally { submit.disabled = false; }
   }
@@ -517,3 +596,179 @@ window.addEventListener('storage', event => {
   if (serviceMode === 'demo' && event.key === storageKey) notify('다른 탭에서 기록이 변경됐어요. 작성 중인 내용을 보관하고 새로고침해주세요.');
 });
 start();
+
+function nicknameInput(value) {
+  return `<label class="field-label" for="nickname">닉네임</label><input id="nickname" name="nickname" value="${e(value)}" minlength="2" maxlength="20" required autocomplete="nickname"><p class="field-help">자동 생성한 이름을 바꿔도 좋아요. 2~20자, 글자·숫자·공백·밑줄·하이픈을 사용할 수 있어요.</p>`;
+}
+
+function accountPanel() {
+  return `<section class="account-panel">${user?.status === 'withdrawing' ? '<p class="note">계정 정리가 중단됐습니다. 탈퇴 항목에서 최초 선택과 현재 비밀번호로 다시 시도해주세요. 다른 기록 작업은 제한됩니다.</p>' : ''}<form id="nickname-form"><h2>나의 닉네임</h2>${nicknameInput(state.nickname)}<button class="button outline" type="submit">닉네임 저장</button></form><details><summary>${serviceMode === 'live' ? '회원 탈퇴' : '체험 계정 정리'}</summary><p>개인 저장 목록과 불필요한 계정정보는 삭제하고 공용 메뉴는 유지합니다. 리뷰·사진은 삭제하거나, 작성자 정보 분리와 개인정보 점검 후 보존을 요청할 수 있습니다. 보존 자료는 점검 전 비공개입니다.</p><form id="withdraw-form"><label class="field-label" for="preserve-content">공개 리뷰·사진 처리</label><select id="preserve-content" name="preserve"><option value="delete">내 리뷰·사진 삭제</option><option value="preserve">개인정보 점검 후 보존 요청</option></select>${serviceMode === 'live' ? '<label class="field-label" for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" name="password" type="password" autocomplete="current-password" required>' : ''}<label class="consent"><input type="checkbox" name="confirm" required> 삭제와 보존 대상을 확인했습니다.</label><button class="button danger" type="submit" ${serviceMode === 'live' && !withdrawalReady ? 'disabled' : ''}>${serviceMode === 'live' ? '탈퇴하기' : '체험 기록 정리'}</button>${serviceMode === 'live' && !withdrawalReady ? '<p class="note">계정 삭제 서버 설정이 필요합니다.</p>' : ''}</form></details></section><section><h2>가게 등록 요청과 비공개 초안</h2>${state.requests.map(q => `<article class="request-item"><strong>${e(q.name)}</strong><p>${e(q.address || q.note)}</p><span>${{ pending:'가게 검토 중',approved:'가게 승인 완료',rejected:'반려',resolved:'처리 완료' }[q.status] || '가게 검토 중'}</span><p>${e(q.reason || '')}</p><a class="button outline" href="/me?draft=${e(q.id)}">${q.status === 'approved' ? '이어서 작성·발행하기' : '비공개 초안 작성하기'}</a></article>`).join('') || '<p class="muted">아직 접수한 가게가 없습니다.</p>'}<button class="button outline" data-action="request">가게 등록 요청</button></section>`;
+}
+
+function menuFields(data = {}) {
+  return `<label class="field-label" for="new-menu-name">메뉴 전체 이름 · 필수</label><input id="new-menu-name" name="name" value="${e(data.name || '')}" maxlength="100" required><p class="field-help">메뉴판에 적힌 전체 이름을 입력해주세요. 이미 등록된 메뉴는 추가하지 말고 기존 메뉴를 선택해주세요. 특제·곱빼기·추가 토핑은 리뷰의 주문 옵션에 기록해주세요.</p><div id="menu-matches" aria-live="polite"></div><label class="field-label" for="new-menu-price">가격 · 필수</label><input id="new-menu-price" name="price" type="number" min="0" max="10000000" step="1" value="${e(data.price ?? '')}" required><label class="field-label" for="new-menu-genre">장르 · 필수</label><select id="new-menu-genre" name="genre" required><option value="">장르 선택</option>${genres.map(g => `<option ${data.genre === g ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
+}
+
+function openAddMenu(shopId) {
+  if (!requireDemo('/shops/' + shopId)) return;
+  photoDraft = [];
+  showModal(`<h2 id="modal-title">메뉴 추가</h2><form id="add-menu-form" data-shop="${e(shopId)}">${menuFields()}<label class="field-label" for="menu-photos">사진 · 필수</label><input id="menu-photos" type="file" accept="image/jpeg,image/png,image/webp" multiple required><p class="field-help">10MB 이하 사진을 최대 5장 올려주세요. 사진은 다음 리뷰 작성 화면으로 이어집니다.</p><div id="photo-drafts" class="photo-drafts"></div><p class="form-error" id="flow-error" role="alert"></p><button type="submit" class="button primary full">메뉴 추가하고 리뷰 쓰기</button></form>`);
+  // Converted photos are the source of truth; the file picker is cleared after conversion.
+  modal.querySelector('#menu-photos').required = false;
+}
+
+function openShopRequest() {
+  showModal(`<h2 id="modal-title">가게 등록 요청</h2><p class="note">기존 가게를 먼저 확인해주세요. 승인 전에도 메뉴와 리뷰를 비공개 초안으로 작성할 수 있어요.</p><form id="shop-request-form">${[['name','가게 이름'],['area','지역'],['address','주소'],['lat','위도'],['lng','경도']].map(([name,label]) => `<label class="field-label" for="request-${name}">${label}</label><input id="request-${name}" name="${name}" ${['lat','lng'].includes(name) ? 'type="number" step="any"' : ''} maxlength="${name === 'address' ? 300 : 100}" required>`).join('')}<p class="field-help">가게 위치를 지도에서 선택하거나 정확한 위도·경도를 입력해주세요.</p><div id="request-map" class="map-panel"></div><p id="flow-error" class="form-error" role="alert"></p><button type="submit" class="button primary full">요청하고 비공개 초안 작성하기</button></form>`);
+  renderMap(modal.querySelector('#request-map'), [], mapsConfig, { onPlace(lat,lng) { modal.querySelector('[name=lat]').value = lat; modal.querySelector('[name=lng]').value = lng; } });
+}
+
+function draftPage(requestId) {
+  if (!requireDemo('/me?draft=' + requestId)) return;
+  const q = state.requests.find(q => q.id === requestId);
+  if (!q) return shell(empty('등록 요청을 찾지 못했어요', '내 기록에서 요청 상태를 확인해주세요.', '/me', '내 기록'));
+  const stored = state.drafts.find(d => d.request_id === q.id)?.data || {};
+  photoDraft = (stored.photos || []).map(p => serviceMode === 'live' ? '/api/photos/' + p : p).filter(photoSrc);
+  const candidates = menus.filter(m => m.shopId === q.shop_id);
+  shell(`<section class="form-page"><a href="/me">← 내 기록</a><h1>${e(q.name)} · 비공개 초안</h1><p class="note">${q.status === 'approved' ? '가게가 승인됐어요. 내용을 확인한 뒤 직접 발행해주세요.' : q.status === 'rejected' ? '가게 등록이 반려됐어요. 초안은 보존됩니다. 사유: ' + e(q.reason) : '가게를 검토하고 있습니다. 초안은 공개되지 않고 점수·지도·대표 사진에 포함되지 않습니다.'}</p><form id="draft-form" data-request="${e(q.id)}">${candidates.length ? `<label class="field-label" for="existing-draft-menu">이미 등록된 메뉴가 있나요?</label><select id="existing-draft-menu" name="menuId"><option value="">새 메뉴로 등록</option>${candidates.map(m => `<option value="${e(m.id)}">${e(m.name)}${ownReview(m.id) ? ' · 기존 내 리뷰 있음' : ''}</option>`).join('')}</select>` : ''}${menuFields(stored)}<label class="field-label" for="draft-rating">별점</label><select id="draft-rating" name="rating"><option value="">아직 선택 안 함</option>${[1,2,3,4,5].map(n => `<option value="${n}" ${stored.rating === n ? 'selected' : ''}>${n}점 · ${ratingLabels[n]}</option>`).join('')}</select><label class="field-label" for="draft-body">리뷰 본문 · 5점이면 이유 필수</label><textarea id="draft-body" name="body" maxlength="2000" rows="5">${e(stored.body || '')}</textarea>${optionEditor('draft-options', stored.options)}<details><summary>더 자세히 기록하기</summary>${['broth','noodle','topping'].map((key,i) => `<label>${['국물','면','고명'][i]}<select name="${key}"><option value="">평가 안 함</option>${[1,2,3,4,5].map(n => `<option value="${n}" ${stored.details?.[key] === n ? 'selected' : ''}>${n}점</option>`).join('')}</select></label>`).join('')}</details><label class="field-label" for="draft-photos">사진 · 새 메뉴 등록에는 필수</label><input id="draft-photos" type="file" accept="image/jpeg,image/png,image/webp" multiple><div id="photo-drafts" class="photo-drafts"></div><p id="flow-error" class="form-error" role="alert"></p><button class="button outline" type="submit" name="intent" value="save" formnovalidate>비공개 초안 저장</button>${q.status === 'approved' ? '<button class="button primary" type="submit" name="intent" value="publish">확인하고 발행</button>' : ''}</form></section>`, 'me');
+  renderPhotoDrafts();
+}
+
+function registrationCard(q) {
+  return `<article class="admin-item"><h3>${e(q.name)}</h3><p>${e(q.area)} · ${e(q.address || q.note)}</p><p>위치 ${e(q.lat)}, ${e(q.lng)} · ${e(q.status)}</p>${q.status === 'pending' ? `<form id="registration-decision" data-request="${e(q.id)}"><label>기존 가게 중복 여부<select name="shopId"><option value="">새 가게로 승인</option>${shops.map(s => `<option value="${e(s.id)}">${e(s.name)} · ${e(s.address)}</option>`).join('')}</select></label><label>검토 사유 · 반려 시 필수<input name="reason" maxlength="1000"></label><button type="submit" name="decision" value="approved" class="button outline">승인·연결</button><button type="submit" name="decision" value="rejected" class="button outline">반려</button></form>` : `<p>${e(q.reason)}</p>`}</article>`;
+}
+
+function mountShopMap(shop) {
+  const intro = document.querySelector('.shop-intro');
+  if (!intro || !Number.isFinite(shop.lat) || !Number.isFinite(shop.lng)) return;
+  intro.insertAdjacentHTML('beforeend', `<a class="button outline" href="${e(directions(shop))}" target="_blank" rel="noopener noreferrer">Google Maps 길찾기 ↗</a><div id="shop-map" class="map-panel"></div>`);
+  renderMap(document.querySelector('#shop-map'), [shop], mapsConfig);
+}
+
+function showMapList() {
+  if (serviceMode !== 'live') { showModal('<h2 id="modal-title">체험용 가상 가게입니다</h2><p>가상 위치를 실제 지도나 길찾기에 표시하지 않습니다. Google Maps 연결은 실서비스에서 사용합니다.</p>'); return; }
+  const results = filteredMenus(new URLSearchParams(location.search));
+  const ids = new Set(results.map(m => m.shopId));
+  showModal(`<h2 id="modal-title">등록된 가게 지도</h2><div id="results-map" class="map-panel"></div><p class="note">승인된 가게만 표시합니다. 핀을 선택하면 가게의 메뉴를 볼 수 있어요.</p>`);
+  renderMap(modal.querySelector('#results-map'), shops.filter(s => ids.has(s.id)), mapsConfig, { onSelect(shop) { navigate('/shops/' + encodeURIComponent(shop.id)); } });
+}
+
+async function uploadedPhotos() {
+  if (serviceMode !== 'live') return [...photoDraft];
+  for (let i=0; i<photoDraft.length; i++) if (!photoDraft[i].startsWith('/api/photos/')) photoDraft[i] = (await request('photos', 'POST', { data: photoDraft[i] })).url;
+  return [...photoDraft];
+}
+
+// New actions share the existing modal, persistence and service API.
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-action]');
+  if (!button || !['add-menu','like','privacy-approve'].includes(button.dataset.action)) return;
+  const { action,id } = button.dataset;
+  if (action === 'add-menu') return openAddMenu(id);
+  if (!requireDemo()) return;
+  button.disabled = true;
+  try {
+    if (action === 'privacy-approve') {
+      await request('admin','POST',{ type:'privacy',id, checked: document.querySelector('#privacy-' + CSS.escape(id))?.checked === true,reason: document.querySelector('#reason-' + CSS.escape(id))?.value || '' });
+      return await adminPage();
+    }
+    if (serviceMode === 'live') { const r = state.reviews.find(r => r.id === id); await request('likes','POST',{reviewId:id,liked:!r?.liked}); await refreshService(); }
+    else { const own = state.reviews.find(r => r.id === id && r.userId === demoId); if (own) throw Error('본인 리뷰에는 좋아요를 누를 수 없어요.'); if (!persist({ ...state, liked: state.liked.includes(id) ? state.liked.filter(x => x!==id) : [...state.liked,id] })) return; }
+    await render();
+  } catch (error) { notify(error.message); button.disabled = false; }
+});
+
+document.addEventListener('input', event => {
+  if (event.target.id !== 'new-menu-name') return;
+  const shop = event.target.closest('form').dataset.shop;
+  const normalized = normalizeMenuName(event.target.value);
+  const matches = menus.filter(m => m.shopId === shop && normalized && normalizeMenuName(m.name).includes(normalized));
+  const target = document.querySelector('#menu-matches');
+  if (target) target.innerHTML = matches.map(m => `<a class="button outline" href="/menus/${e(m.id)}/review">기존 메뉴 선택: ${e(m.name)}</a>`).join('');
+});
+
+document.addEventListener('submit', async event => {
+  const form = event.target;
+  if (!['auth-form','nickname-form','withdraw-form','add-menu-form','shop-request-form','draft-form','registration-decision'].includes(form.id)) return;
+  event.preventDefault();
+  if (form.dataset.busy === 'true') return; form.dataset.busy = 'true';
+  const data = new FormData(form), submit = event.submitter || form.querySelector('button[type=submit]');
+  submit.disabled = true;
+  try {
+    if (form.id === 'auth-form') {
+      const mode = form.dataset.mode;
+      const p = new URLSearchParams(location.search);
+      const payload = { ...Object.fromEntries(data), agreed: data.get('agreed') === 'on', ageConfirmed: data.get('ageConfirmed') === 'on', next: p.get('next') };
+      if (mode === 'verify') { payload.tokenHash = p.get('token_hash'); payload.type = p.get('type'); }
+      const result = await request('auth/' + ({ reset:'password' }[mode] || mode), 'POST', payload);
+      if (result.message) form.querySelector('#auth-message').textContent = result.message;
+      else { await refreshService(); navigate(result.next || '/me', true); }
+      return;
+    }
+    if (form.id === 'nickname-form') {
+      const nickname = String(data.get('nickname')).trim();
+      if (validateNickname(nickname)) throw Error(validateNickname(nickname));
+      if (serviceMode === 'live') { await request('profile','PATCH',{ nickname }); await refreshService(); }
+      else if (!persist({ ...state,nickname,reviews:state.reviews.map(r => r.userId === demoId ? { ...r,author:nickname } : r) })) return;
+      notify('닉네임을 저장했어요.'); return;
+    }
+    if (form.id === 'withdraw-form') {
+      if (serviceMode === 'live') { await request('account/withdraw','POST',{ preserve:data.get('preserve') === 'preserve',password:data.get('password') }); await refreshService(); }
+      else {
+        const reviews = data.get('preserve') === 'preserve' ? state.reviews.map(r => ({ ...r,userId:null,author:'탈퇴한 회원',hidden:true,privacyPending:true })) : [];
+        if (!persist({ ...state,active:false,saved:[],reviews,requests:[],drafts:[],newPhotos:{},nickname:generatedNickname() })) return;
+      }
+      for (const key of Object.keys(sessionStorage)) if (key.startsWith('ramenmukja-photo-draft:')) sessionStorage.removeItem(key); navigate('/'); notify('계정 정리를 완료했어요.'); return;
+    }
+    if (form.id === 'registration-decision') {
+      await request('admin','POST',{ type:'registration',id:form.dataset.request,decision:submit.value,reason:String(data.get('reason')),shopId:data.get('shopId') || null }); await refreshService(); await adminPage(); return;
+    }
+    if (form.id === 'shop-request-form') {
+      const record = { ...Object.fromEntries(data), lat:Number(data.get('lat')),lng:Number(data.get('lng')) };
+      let row;
+      if (serviceMode === 'live') { row = await request('requests','POST',record); await refreshService(); }
+      else { if (!record.name.trim() || !record.area.trim() || !record.address.trim() || Math.abs(record.lat)>90 || Math.abs(record.lng)>180) throw Error('주소와 위치를 확인해주세요.'); row={ ...record,id:crypto.randomUUID(),status:'pending' }; if (!persist({ ...state,requests:[...state.requests,row] })) return; }
+      navigate('/me?draft=' + row.id); return;
+    }
+    if (form.id === 'add-menu-form') {
+      const record = { shopId:form.dataset.shop,name:String(data.get('name')).trim(),price:Number(data.get('price')),genre:data.get('genre'),photos:photoDraft };
+      const error = validateMenu(record); if (error) throw Error(error);
+      if (menus.some(m => m.shopId===record.shopId && normalizeMenuName(m.name)===normalizeMenuName(record.name))) throw Error('이미 있는 메뉴예요. 기존 메뉴를 선택해주세요.');
+      record.photos=await uploadedPhotos();
+      let menu;
+      if (serviceMode === 'live') { menu=await request('menus','POST',record); draftPhotos.set(menu.id,record.photos); sessionStorage.setItem('ramenmukja-photo-draft:' + menu.id,JSON.stringify(record.photos)); await refreshService(); }
+      else { menu={ shopId:record.shopId,name:record.name,price:record.price,id:crypto.randomUUID(),tags:[record.genre],image:'',taste:[],status:'active',description:'' }; const next={ ...state,customMenus:[...state.customMenus,menu],newPhotos:{...state.newPhotos,[menu.id]:record.photos} }; if (!persist(next)) return; menus=[...demoMenus,...state.customMenus]; }
+      navigate('/menus/' + menu.id + '/review'); return;
+    }
+    if (form.id === 'draft-form') {
+      const q=state.requests.find(q => q.id===form.dataset.request), stored=state.drafts.find(d => d.request_id===q.id);
+      const record={ ...Object.fromEntries(data),price:data.get('price') === '' ? null : Number(data.get('price')),rating:Number(data.get('rating')),details:Object.fromEntries(['broth','noodle','topping'].filter(k => data.get(k)).map(k => [k,Number(data.get(k))])),photos:await uploadedPhotos() };
+      const draft={ id:stored?.id || crypto.randomUUID(),request_id:q.id,data:{ ...record,photos:record.photos.map(p => serviceMode==='live'?p.slice(12):p) } };
+      if (submit.value === 'publish') {
+        if (q.status!=='approved' || !q.shop_id) throw Error('가게 승인 후 발행할 수 있어요.');
+        const error=validateReview(record); if(error)throw Error(error);
+        if (!record.menuId) { const menuError=validateMenu(record);if(menuError)throw Error(menuError); }
+      }
+      if (serviceMode==='live') {
+        const result = await request('drafts','PUT',{requestId:q.id,data:draft.data});
+        draft.id=result.id;
+        await refreshService();
+      } else if (!persist({...state,drafts:[...state.drafts.filter(d=>d.request_id!==q.id),draft]}))return;
+      if (submit.value === 'publish') {
+        const result=await request('drafts/publish','POST',{id:draft.id});
+        await refreshService();
+        if (result.existing) { navigate('/menus/' + result.menuId + '/review?draft=' + q.id); notify('기존 리뷰를 불러왔어요. 보존된 초안과 비교한 뒤 직접 수정해주세요.'); }
+        else { navigate('/menus/' + result.menuId); notify('리뷰를 발행했어요.'); }
+        return;
+      }
+      notify('비공개 초안을 저장했어요.');return;
+    }
+  } catch (error) { const target=form.querySelector('#flow-error,#auth-message'); if(target)target.textContent=error.message;else notify(error.message); }
+  finally { delete form.dataset.busy; if(submit.isConnected)submit.disabled=false; }
+});
+
+function reviewDraftPreview() {
+ const id=new URLSearchParams(location.search).get('draft');
+ const d=state.drafts.find(d=>d.request_id===id)?.data;
+ if(!d)return '';
+ return `<details class="optional-details" open><summary>보존된 비공개 초안과 비교</summary><p>기존 리뷰는 자동으로 덮어쓰지 않습니다. 필요한 내용을 확인하고 직접 수정해주세요.</p><p>별점 ${e(d.rating)}</p><div class="review-options" aria-label="주문 옵션">${optionTagList(d.options)}</div><p>${e(d.body)}</p><div class="review-photos">${(d.photos||[]).map(p=>serviceMode==='live'?'/api/photos/'+p:p).filter(photoSrc).map(p=>`<img src="${e(p)}" alt="비공개 초안 사진">`).join('')}</div></details>`;
+}
